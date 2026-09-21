@@ -1,0 +1,109 @@
+name: Deploy Config
+
+# 从 GitHub Secrets 生成 .env 并作为 artifact 提供下载。
+#
+# 为什么不用「烘焙进镜像」：
+#   1. 本仓库与 GHCR 包均为 public，镜像内任何内容都可被匿名拉取
+#   2. 镜像层一旦写入就永久留在 history 中，删除也去不掉
+#   3. 密钥变更需要重新构建并推送整个镜像，无法独立轮换
+#   因此密钥只在运行时注入（compose 读 .env），不进镜像。
+#
+# 为什么手动触发而非自动：
+#   产物含真实密钥，自动生成会在每次 push 后堆积可下载的敏感 artifact。
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: '生成哪个环境的配置'
+        required: true
+        default: production
+        type: choice
+        options:
+          - production
+          - staging
+
+jobs:
+  build-env:
+    name: Generate .env from secrets
+    runs-on: ubuntu-latest
+    # 仅仓库协作者可触发（fork 的 PR 拿不到 secrets）
+    if: github.event_name == 'workflow_dispatch'
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Write .env from secrets
+        env:
+          MONGO_PORT: ${{ secrets.MONGO_PORT }}
+          MONGO_INITDB_ROOT_USERNAME: ${{ secrets.MONGO_INITDB_ROOT_USERNAME }}
+          MONGO_INITDB_ROOT_PASSWORD: ${{ secrets.MONGO_INITDB_ROOT_PASSWORD }}
+          MONGO_INITDB_DATABASE: ${{ secrets.MONGO_INITDB_DATABASE }}
+          GO_PORT: ${{ secrets.GO_PORT }}
+          SECRET_KEY: ${{ secrets.SECRET_KEY }}
+          MAIL_SMTP_SERVER: ${{ secrets.MAIL_SMTP_SERVER }}
+          MAIL_SMTP_PORT: ${{ secrets.MAIL_SMTP_PORT }}
+          MAIL_SENDER: ${{ secrets.MAIL_SENDER }}
+          MAIL_PASSWORD: ${{ secrets.MAIL_PASSWORD }}
+          VERIFY_CODE_EXPIRE: ${{ secrets.VERIFY_CODE_EXPIRE }}
+          AES_KEY: ${{ secrets.AES_KEY }}
+          ECC_PRIVATE_KEY: ${{ secrets.ECC_PRIVATE_KEY }}
+          ECC_PUBLIC_KEY: ${{ secrets.ECC_PUBLIC_KEY }}
+          RSA_KEY_SIZE: ${{ secrets.RSA_KEY_SIZE }}
+          RSA_KEY_EXPIRE_MINUTES: ${{ secrets.RSA_KEY_EXPIRE_MINUTES }}
+          RSA_ENABLE: ${{ secrets.RSA_ENABLE }}
+          SNOWFLAKE_NODE: ${{ secrets.SNOWFLAKE_NODE }}
+          FRONTEND_PORT: ${{ secrets.FRONTEND_PORT }}
+          TEST_MODE: ${{ secrets.TEST_MODE }}
+          TARGET: ${{ inputs.target }}
+        run: |
+          set -euo pipefail
+          out=.env
+
+          {
+            echo "# 由 GitHub Actions 从 Secrets 生成"
+            echo "# 环境: $TARGET"
+            echo "# 生成时间: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            echo "# commit: ${{ github.sha }}"
+            echo
+          } > "$out"
+
+          # 只写入非空的 secret，避免把空值覆盖掉服务器上的现有配置
+          for kv in \
+            "MONGO_PORT" "MONGO_INITDB_ROOT_USERNAME" "MONGO_INITDB_ROOT_PASSWORD" \
+            "MONGO_INITDB_DATABASE" "GO_PORT" "SECRET_KEY" \
+            "MAIL_SMTP_SERVER" "MAIL_SMTP_PORT" "MAIL_SENDER" "MAIL_PASSWORD" \
+            "VERIFY_CODE_EXPIRE" "AES_KEY" "ECC_PRIVATE_KEY" "ECC_PUBLIC_KEY" \
+            "RSA_KEY_SIZE" "RSA_KEY_EXPIRE_MINUTES" "RSA_ENABLE" \
+            "SNOWFLAKE_NODE" "FRONTEND_PORT" "TEST_MODE"
+          do
+            val="${!kv:-}"
+            if [ -n "$val" ]; then
+              printf '%s=%s\n' "$kv" "$val" >> "$out"
+            else
+              echo "::warning::secret $kv 未设置，已跳过"
+            fi
+          done
+
+          # 校验必填项
+          missing=0
+          for required in MONGO_INITDB_ROOT_PASSWORD SECRET_KEY ECC_PRIVATE_KEY ECC_PUBLIC_KEY; do
+            if ! grep -q "^${required}=" "$out"; then
+              echo "::error::必填 secret 缺失: $required"
+              missing=1
+            fi
+          done
+          [ "$missing" -eq 0 ] || exit 1
+
+          echo "生成完成，共 $(grep -c '=' "$out") 行配置"
+          # 不打印内容，只打印键名
+          grep -o '^[A-Z_]*=' "$out" | tr -d '=' | sed 's/^/  /'
+
+      - name: Upload .env artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: env-${{ inputs.target }}-${{ github.sha }}
+          path: .env
+          # 密钥文件不应长期留存
+          retention-days: 1
+          if-no-files-found: error

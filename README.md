@@ -201,6 +201,57 @@ cp .env.template .env
 
 `.env` 已在 `.gitignore` 中忽略，**不会被提交**。
 
+##### 自动生成密钥
+
+`SECRET_KEY` / `AES_KEY` / ECC 密钥对可用脚本生成，避免手工填错：
+
+```powershell
+# Windows（推荐）：生成并直接写入 web/.env
+pwsh web/scripts/gen-secrets.ps1 -OutFile web/.env
+
+# 只看结果不写文件
+pwsh web/scripts/gen-secrets.ps1
+```
+
+```bash
+# Linux / macOS
+bash web/scripts/gen-secrets.sh
+```
+
+生成后仍需手工填写 `MAIL_SENDER` 和 `MAIL_PASSWORD`（邮箱授权码，脚本无法生成）。
+
+> ⚠️ ECC 密钥一旦生成就不要随意更换：库中 `s_password` 是用它加密的，
+> 换密钥会导致已有数据无法解密，必须同步迁移。
+
+##### 通过 GitHub Secrets 下发配置
+
+密钥可存在 GitHub 仓库 Secrets 中，由工作流生成 `.env` 供下载，**不进入仓库、也不烘焙进镜像**。
+
+**1. 把本地 `.env` 批量推送到 Secrets**
+
+```powershell
+# 先看会写入哪些键（不实际写入）
+pwsh web/scripts/set-github-secrets.ps1 -EnvFile web/.env -Repo <owner>/<repo> -WhatIf
+
+# 实际写入
+pwsh web/scripts/set-github-secrets.ps1 -EnvFile web/.env -Repo <owner>/<repo>
+```
+
+**2. 需要时生成 `.env`**
+
+在 Actions 页面手动触发 **Deploy Config** 工作流，产物在 Artifacts 中（保留 1 天）。
+
+##### 为什么不把密钥烘焙进 Docker 镜像
+
+| 原因 | 说明 |
+|---|---|
+| 镜像公开 | 本仓库与 GHCR 包均为 public，镜像内任何内容都可匿名拉取 |
+| 无法删除 | 镜像层一旦写入就永久留在 `docker history` 中 |
+| 前端更危险 | `VUE_APP_*` 会被编译进 JS，等于把密钥发给每个访客 |
+| 无法轮换 | 改密钥要重新构建推送整个镜像 |
+
+因此密钥只在**运行时**由 compose 注入。构建期不需要任何密钥（后端只编译 Go，前端无 `VUE_APP_*` 依赖）。
+
 ```dotenv
 # MongoDB（必填）
 MONGO_INITDB_ROOT_USERNAME=your_mongo_username
