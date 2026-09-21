@@ -1,0 +1,66 @@
+name: Mirror Benchmark (temporary)
+
+# 临时工作流：对比 GitHub runner 上「国内镜像源」与「官方源」的实际速度
+# 用完即删
+on:
+  workflow_dispatch:
+
+jobs:
+  bench:
+    name: mirror benchmark
+    runs-on: ubuntu-latest
+    steps:
+      - name: Runner location
+        run: |
+          echo "=== runner 出口 IP / 地区 ==="
+          curl -s --max-time 10 https://ipinfo.io/json || true
+          echo
+
+      - name: Measure apk index (Alpine)
+        run: |
+          echo "=== Alpine APKINDEX.tar.gz ==="
+          for u in \
+            "https://dl-cdn.alpinelinux.org/alpine/v3.20/main/x86_64/APKINDEX.tar.gz|dl-cdn (官方)" \
+            "https://mirrors.ustc.edu.cn/alpine/v3.20/main/x86_64/APKINDEX.tar.gz|ustc (国内)" \
+            "https://mirrors.aliyun.com/alpine/v3.20/main/x86_64/APKINDEX.tar.gz|aliyun (国内)"
+          do
+            url="${u%%|*}"; label="${u##*|}"
+            t=$(curl -s -o /dev/null --max-time 30 -w '%{time_total} %{speed_download} %{size_download}' "$url" 2>/dev/null || echo "TIMEOUT")
+            printf '  %-18s %s\n' "$label" "$t"
+          done
+          echo "  (格式: 总耗时s  速度B/s  字节数)"
+
+      - name: Measure Go module proxy
+        run: |
+          echo "=== Go module proxy (拉取 gin 的版本列表) ==="
+          for u in \
+            "https://proxy.golang.org/github.com/gin-gonic/gin/@v/list|proxy.golang.org (官方)" \
+            "https://goproxy.cn/github.com/gin-gonic/gin/@v/list|goproxy.cn (国内)" \
+            "https://goproxy.io/github.com/gin-gonic/gin/@v/list|goproxy.io"
+          do
+            url="${u%%|*}"; label="${u##*|}"
+            t=$(curl -s -o /dev/null --max-time 30 -w '%{time_total} %{speed_download}' "$url" 2>/dev/null || echo "TIMEOUT")
+            printf '  %-26s %s\n' "$label" "$t"
+          done
+
+      - name: Measure npm registry
+        run: |
+          echo "=== npm registry (拉取 vue 的元数据) ==="
+          for u in \
+            "https://registry.npmjs.org/vue|registry.npmjs.org (官方)" \
+            "https://registry.npmmirror.com/vue|npmmirror (国内)"
+          do
+            url="${u%%|*}"; label="${u##*|}"
+            t=$(curl -s -o /dev/null --max-time 30 -w '%{time_total} %{speed_download} %{size_download}' "$url" 2>/dev/null || echo "TIMEOUT")
+            printf '  %-28s %s\n' "$label" "$t"
+          done
+
+      - name: Measure docker base image pull
+        run: |
+          echo "=== 基础镜像拉取（docker.io 官方 registry）==="
+          docker pull alpine:3.20 >/dev/null 2>&1 && echo "  alpine:3.20 拉取成功"
+          docker rmi alpine:3.20 >/dev/null 2>&1 || true
+          start=$(date +%s)
+          docker pull golang:1.25-alpine >/dev/null 2>&1
+          end=$(date +%s)
+          echo "  golang:1.25-alpine 耗时 $((end-start))s"
