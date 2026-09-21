@@ -1,6 +1,12 @@
 # 使用官方 Node.js 镜像作为基础镜像
 FROM node:20-alpine
 
+# npm 源可按环境覆盖：
+#   本机（中国大陆）：默认 npmmirror
+#   GitHub Actions：runner 在 Azure 美国节点，官方源快约 8 倍
+# 实测（Azure westus3）：registry.npmjs.org 0.17s / npmmirror 1.27s
+ARG NPM_REGISTRY=https://registry.npmmirror.com
+
 # 设置工作目录
 WORKDIR /app
 
@@ -8,7 +14,7 @@ WORKDIR /app
 COPY package*.json ./
 
 # 安装依赖
-RUN npm config set registry https://registry.npmmirror.com && npm install --legacy-peer-deps
+RUN npm config set registry ${NPM_REGISTRY} && npm install --legacy-peer-deps
 
 # 复制源代码
 COPY . .

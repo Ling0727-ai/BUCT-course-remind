@@ -3,14 +3,21 @@
 # ──────────────────────────────────────────────
 FROM golang:1.25-alpine AS builder
 
+# 镜像源可按环境覆盖：
+#   本机（中国大陆）：用默认值，国内源更快
+#   GitHub Actions：runner 在 Azure 美国节点，官方源反而快 10-20 倍
+#                   由 workflow 传 --build-arg 覆盖
+# 实测（Azure westus3）：dl-cdn 0.22s / ustc 2.85s / aliyun 0.88s
+ARG APK_MIRROR=mirrors.ustc.edu.cn
+ARG GOPROXY=https://goproxy.cn,direct
+
 # 安装构建依赖
 #   只需 git：GOPROXY 的 direct 回退靠它拉取依赖
 #   不需要 gcc/musl-dev：下面用 CGO_ENABLED=0 编译纯静态二进制，
 #   省掉 gcc 及其依赖（binutils/gmp/mpfr4/isl26 等约 200MB）可大幅缩短构建时间
-# 换用国内 Alpine 源：dl-cdn.alpinelinux.org 直连很慢
 # 挂载 apk 缓存：包列表变化时复用已下载的 .apk（故不再用 --no-cache）
 RUN --mount=type=cache,target=/var/cache/apk,sharing=locked \
-    sed -i 's|dl-cdn.alpinelinux.org|mirrors.ustc.edu.cn|g' /etc/apk/repositories && \
+    sed -i "s|dl-cdn.alpinelinux.org|${APK_MIRROR}|g" /etc/apk/repositories && \
     apk add git
 
 WORKDIR /build
@@ -19,8 +26,8 @@ WORKDIR /build
 # 只要 go.mod/go.sum 不变，下次构建直接用缓存，不重新下载依赖
 COPY go.mod go.sum ./
 
-# 配置 GOPROXY 使用国内镜像，加速依赖下载
-RUN go env -w GOPROXY=https://goproxy.cn,direct && \
+# 配置 GOPROXY（默认国内镜像）
+RUN go env -w GOPROXY=${GOPROXY} && \
     go mod download
 
 # 复制全部源码
@@ -41,15 +48,18 @@ RUN CGO_ENABLED=0 GOOS=linux go build \
 # ──────────────────────────────────────────────
 FROM alpine:3.20 AS runner
 
+# ARG 作用域限于单个构建阶段，runner 阶段需重新声明
+ARG APK_MIRROR=mirrors.ustc.edu.cn
+
 # 安装运行时依赖
 #   ca-certificates  HTTPS 请求（发邮件、调外部 API）必需
 #   curl             健康检查
 #   tzdata           时区支持（北京时间）
 #   haveged          熵守护进程：防止 alpine 容器内 crypto/rand 因熵不足而阻塞
 #                    （RSA 2048 密钥生成需要大量随机熵）
-# 换用国内 Alpine 源 + 复用 apk 缓存，理由同 builder 阶段
+# 复用 apk 缓存，理由同 builder 阶段
 RUN --mount=type=cache,target=/var/cache/apk,sharing=locked \
-    sed -i 's|dl-cdn.alpinelinux.org|mirrors.ustc.edu.cn|g' /etc/apk/repositories && \
+    sed -i "s|dl-cdn.alpinelinux.org|${APK_MIRROR}|g" /etc/apk/repositories && \
     apk add ca-certificates curl tzdata haveged su-exec && \
     cp /usr/share/zoneinfo/Asia/Shanghai /etc/localtime && \
     echo "Asia/Shanghai" > /etc/timezone

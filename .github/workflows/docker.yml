@@ -68,8 +68,10 @@ jobs:
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          # GitHub 托管 runner 在国内源可达性不稳定，失败时回退直连
-          # （Dockerfile 内已配 goproxy.cn，这里只影响基础镜像拉取）
+          # runner 在 Azure 境外节点，官方源比国内源快 10-20 倍（实测见 Dockerfile 注释）
+          build-args: |
+            APK_MIRROR=dl-cdn.alpinelinux.org
+            GOPROXY=https://proxy.golang.org,direct
           cache-from: type=gha,scope=backend
           cache-to: type=gha,mode=max,scope=backend
           provenance: false
@@ -118,6 +120,9 @@ jobs:
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          # runner 在 Azure 境外节点，官方 npm 源更快
+          build-args: |
+            NPM_REGISTRY=https://registry.npmjs.org
           cache-from: type=gha,scope=frontend
           cache-to: type=gha,mode=max,scope=frontend
           provenance: false
