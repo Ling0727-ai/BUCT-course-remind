@@ -152,8 +152,8 @@ BUCT-course-remind/
 ```bash
 cd web
 
-# 复制并编辑环境变量
-cp .env.example .env
+# 复制环境变量模板并填入真实值（模板不含任何密钥）
+cp .env.template .env
 
 # 启动（MongoDB + Go后端 + 前端）
 docker compose -f docker-compose-go.yml up -d
@@ -166,6 +166,23 @@ docker compose -f docker-compose-go.yml logs -f backend
 
 - 前端：`http://localhost:3033`
 - Go 后端：`http://localhost:5000`
+
+#### 使用 CI 构建好的镜像
+
+推送代码或打 tag 后，GitHub Actions 会自动构建并推送到 GHCR：
+
+| 镜像 | 地址 |
+|---|---|
+| 后端 | `ghcr.io/ling0727-ai/buct-course-remind-backend` |
+| 前端 | `ghcr.io/ling0727-ai/buct-course-remind-frontend` |
+
+可用 tag：`latest`（main 分支）、`main`、`sha-xxxxxxx`、语义化版本（打 `v*` tag 时）。
+镜像为 **public**，拉取无需登录。
+
+```bash
+docker pull ghcr.io/ling0727-ai/buct-course-remind-backend:latest
+docker pull ghcr.io/ling0727-ai/buct-course-remind-frontend:latest
+```
 
 #### 使用 Python 后端（已移除）
 
