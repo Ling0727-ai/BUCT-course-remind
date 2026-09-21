@@ -104,6 +104,9 @@ jobs:
         with:
           name: env-${{ inputs.target }}-${{ github.sha }}
           path: .env
+          # .env 以点开头，属于隐藏文件；upload-artifact v4 默认跳过隐藏文件，
+          # 必须显式开启，否则报 "No files were found with the provided path"
+          include-hidden-files: true
           # 密钥文件不应长期留存
           retention-days: 1
           if-no-files-found: error
