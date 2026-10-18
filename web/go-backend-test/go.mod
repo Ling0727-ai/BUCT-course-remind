@@ -3,7 +3,7 @@ module github.com/Ling0727-ai/go-buct-course-backend
 go 1.27.0
 
 require (
-	github.com/Ling0727-ai/go-buct-course v1.0.0
+	github.com/Ling0727-ai/go-buct-course v1.1.0
 	github.com/bwmarrin/snowflake v0.3.0
 	github.com/gin-gonic/gin v1.12.0
 	github.com/golang-jwt/jwt/v5 v5.3.1
