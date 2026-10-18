@@ -168,6 +168,29 @@ ghcr.io/ling0727-ai/buct-course-remind-backend:latest
 ghcr.io/ling0727-ai/buct-course-remind-frontend:latest
 ```
 
+#### 可选：同时发布到 Docker Hub（docker.io）
+
+仓库的 GitHub Actions 支持一次构建，同时推送到 GHCR 和 Docker Hub，两个仓库使用相同的镜像标签。
+在 GitHub 仓库 **Settings → Secrets and variables → Actions → Secrets** 中添加：
+
+| Repository secret    | 内容                                                  |
+|----------------------|-------------------------------------------------------|
+| `DOCKERHUB_USERNAME` | 你的 Docker Hub 用户名（不是邮箱）                    |
+| `DOCKERHUB_TOKEN`    | Docker Hub 的访问令牌，授予目标仓库 Read & Write 权限 |
+
+在 Docker Hub 的个人命名空间下准备 `buct-course-remind-backend` 和 `buct-course-remind-frontend` 两个仓库；
+若需要免登录拉取，将它们设为 Public。然后在 GitHub Actions 手动运行 **Build and Publish Docker Images**，
+或通过原有的 `main` 分支推送 / `v*` 标签触发发布。发布后可使用：
+
+```bash
+docker pull docker.io/<你的DockerHub用户名>/buct-course-remind-backend:latest
+docker pull docker.io/<你的DockerHub用户名>/buct-course-remind-frontend:latest
+```
+
+未同时配置上述两个 Secrets 时，只发布到 GHCR，日志会提示跳过 Docker Hub；PR 不登录、不推送到任何镜像仓库。
+配置完整但凭据无效或无推送权限时，工作流会失败，请检查令牌和仓库权限。
+使用 Docker Hub 部署时，将部署配置中的 GHCR 镜像地址替换为对应 Docker Hub 地址即可。
+
 #### 1. 准备目录与 `.env`
 
 ```bash
