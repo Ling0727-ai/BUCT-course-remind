@@ -47,6 +47,17 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # Docker COPY 只能看到 Git checkout 中的构建上下文，本机未跟踪的文件不会出现在 runner。
+      - name: Verify backend dependency manifests
+        shell: bash
+        run: |
+          for manifest in web/go-backend-test/go.mod web/go-backend-test/go.sum; do
+            if ! git ls-files --error-unmatch -- "$manifest" >/dev/null 2>&1 || [ ! -s "$manifest" ]; then
+              echo "::error file=$manifest::Missing or empty tracked dependency manifest. Commit go.mod and go.sum before building the backend image."
+              exit 1
+            fi
+          done
+
       # GHCR 要求仓库路径全小写，而 GitHub 用户名可能含大写
       # （本仓库 owner 是 Ling0727-ai）。直接用 github.repository_owner
       # 会报 "repository name must be lowercase"，所以这里转一次。
