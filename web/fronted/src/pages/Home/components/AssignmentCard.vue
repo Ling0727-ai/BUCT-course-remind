@@ -245,7 +245,7 @@ export default defineComponent({
 .card.urgent { border-left-color: var(--red); }
 .card.warning { border-left-color: var(--orange); }
 .card.normal { border-left-color: var(--primary); }
-.card.completed { border-left-color: var(--green); background: var(--green-subtle); }
+.card.completed { border-left-color: var(--green); background: color-mix(in srgb, var(--green-subtle) calc(var(--card-alpha) * 100%), transparent); }
 .card[data-type="待办"] { border-left-color: var(--purple); }
 
 /* ── Priority dot (todo only) ── */

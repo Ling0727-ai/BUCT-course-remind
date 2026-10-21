@@ -118,9 +118,9 @@ export default defineComponent({
   padding: 0 var(--space-6) var(--space-8);
 }
 .task-board { display: grid; grid-template-columns: repeat(var(--task-columns, 3), minmax(0, 1fr)); gap: 16px; align-items: start; }
-.task-group { min-width: 0; padding: 14px 10px; border-top: 3px solid var(--border); border-radius: 12px; background: var(--primary-subtle); }
-.task-group.urgent { border-top-color: var(--red); background: var(--red-subtle); }
-.task-group.warning { border-top-color: var(--orange); background: var(--orange-subtle); }
+.task-group { --group-bg: var(--primary-subtle); min-width: 0; padding: 14px 10px; border-top: 3px solid var(--border); border-radius: 12px; background: color-mix(in srgb, var(--group-bg) calc(var(--card-alpha) * 100%), transparent); }
+.task-group.urgent { --group-bg: var(--red-subtle); border-top-color: var(--red); }
+.task-group.warning { --group-bg: var(--orange-subtle); border-top-color: var(--orange); }
 .task-group.normal { border-top-color: var(--primary); }
 .task-group.completed { grid-column: 1 / -1; background: transparent; }
 .task-group:not(.completed) .grid { grid-template-columns: minmax(0, 1fr); gap: 12px; }
