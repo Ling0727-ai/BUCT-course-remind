@@ -76,14 +76,6 @@
         <FontSettings />
       </section>
 
-      <!-- Mouse Trail -->
-      <section class="card">
-        <h2 class="card-title">
-          鼠标拖尾颜色
-          <span class="badge">测试版</span>
-        </h2>
-        <ColorPicker />
-      </section>
     </div>
   </div>
 </template>
@@ -91,13 +83,12 @@
 <script lang="ts">
 import { defineComponent } from 'vue';
 import { useSettingsService } from './settings';
-import ColorPicker from './components/ColorPicker.vue';
 import BackgroundSettings from './components/BackgroundSettings.vue';
 import FontSettings from './components/FontSettings.vue';
 
 export default defineComponent({
   name: 'Settings',
-  components: { ColorPicker, BackgroundSettings, FontSettings },
+  components: { BackgroundSettings, FontSettings },
   setup() { return useSettingsService(); }
 });
 </script>
@@ -165,16 +156,6 @@ export default defineComponent({
   display: flex;
   align-items: center;
   gap: 8px;
-}
-
-.badge {
-  font-size: 10px;
-  font-weight: var(--font-bold);
-  color: white;
-  background: var(--orange);
-  padding: 2px 6px;
-  border-radius: 4px;
-  text-transform: uppercase;
 }
 
 /* Fields */

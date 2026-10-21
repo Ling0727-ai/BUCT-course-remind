@@ -1,5 +1,5 @@
 <template>
-  <div class="page">
+  <div class="page workspace">
     <Header
       :current-time="currentTime"
       :user="user"
@@ -24,12 +24,18 @@
       @show-stat-modal="openStatModal"
     />
 
+    <div class="section-heading">
+      <div><span class="section-eyebrow">YOUR STUDY SPACE</span><h2>学习任务</h2></div>
+      <span class="result-count">{{ filteredAssignments.length }} 项任务<span v-if="filtersActive"> · 已筛选</span></span>
+    </div>
+
     <AssignmentGrid
       :assignments="filteredAssignments"
       :loading="loading"
       :error="error"
       :compact="compactView"
       :filters-active="filtersActive"
+      :status-filter="statusFilter"
       @clear-filters="clearFilters"
       @refresh="handleGridRefresh"
       @open-url="openAssignmentUrl"
@@ -56,7 +62,7 @@
       @close="closePreviewModal" @open-url="openAssignmentUrl"
     />
     <ConfirmModal
-      :show="showConfirmModal" :message="confirmMessage"
+      :show="showConfirmModal" :message="confirmMessage" :busy="confirmBusy"
       @confirm="onConfirmAction" @cancel="onCancelConfirm"
     />
     <StatisticsModal
@@ -85,7 +91,7 @@
     />
 
     <div class="footer">
-      <span>联系邮箱：<a href="mailto:buct_course_remind@163.com">buct_course_remind@163.com</a></span>
+      <span>联系邮箱：<a href="mailto:lingxin@lingxin.org">lingxin@lingxin.org</a></span>
       <span class="sep">|</span>
       <span>GitHub：<a href="https://github.com/ling0727-ai" target="_blank" rel="noopener">lingxin</a></span>
     </div>
@@ -212,24 +218,38 @@ export default defineComponent({
 
     const showConfirmModal = ref(false);
     const confirmMessage = ref('');
-    let confirmCallback: (() => void) | null = null;
-    const onConfirmAction = () => { confirmCallback?.(); showConfirmModal.value = false; confirmCallback = null; };
-    const onCancelConfirm = () => { showConfirmModal.value = false; confirmCallback = null; };
-    const showCustomConfirm = (msg: string, cb: () => void) => { confirmMessage.value = msg; confirmCallback = cb; showConfirmModal.value = true; };
+    const confirmBusy = ref(false);
+    let confirmCallback: (() => void | Promise<unknown>) | null = null;
+    const onConfirmAction = async () => {
+      if (confirmBusy.value) return;
+      confirmBusy.value = true;
+      try {
+        await confirmCallback?.();
+        showConfirmModal.value = false;
+        confirmCallback = null;
+      } catch (error) {
+        showToast('error', '操作失败', error instanceof Error ? error.message : '请稍后重试');
+      } finally {
+        confirmBusy.value = false;
+      }
+    };
+    const onCancelConfirm = () => { if (!confirmBusy.value) { showConfirmModal.value = false; confirmCallback = null; } };
+    const showCustomConfirm = (msg: string, cb: () => void | Promise<unknown>) => { confirmMessage.value = msg; confirmCallback = cb; showConfirmModal.value = true; };
 
     const showStatisticsModal = ref(false);
     const currentStatType = ref('');
-    const filteredStatItems = ref<Assignment[]>([]);
+    const filteredStatItems = computed(() => service.allItems.value.filter(item => {
+      if (currentStatType.value === 'urgent') return service.assignmentStatus(item) === 'urgent';
+      if (currentStatType.value === 'warning') return service.assignmentStatus(item) === 'warning';
+      if (currentStatType.value === 'completed') return item.completed;
+      if (currentStatType.value === 'todos') return item.type === '待办' && !item.completed;
+      return true;
+    }));
     const openStatModal = (type: string) => {
       currentStatType.value = type;
-      const all = [...service.assignments.value, ...service.todos.value.map(t => ({ ...t, type: '待办', completed: t.completed } as any))];
-      if (type === 'urgent') filteredStatItems.value = all.filter(i => !i.completed && i.type !== '待办');
-      else if (type === 'completed') filteredStatItems.value = all.filter(i => i.completed);
-      else if (type === 'todos') filteredStatItems.value = all.filter(i => i.type === '待办' && !i.completed);
-      else filteredStatItems.value = all;
       showStatisticsModal.value = true;
     };
-    const closeStatModal = () => { showStatisticsModal.value = false; filteredStatItems.value = []; };
+    const closeStatModal = () => { showStatisticsModal.value = false; };
 
     const handleGridRefresh = (notify = false) => service.fetchAssignments(notify);
 
@@ -264,11 +284,11 @@ export default defineComponent({
     };
 
     const showBlacklistModal = ref(false);
-    const extractCourseID = (url?: string) => { const m = url?.match(/courseId=(\d+)/); return m ? m[1] : null; };
+    const extractCourseID = (url?: string) => { const m = url?.match(/[?&]courseId=(\d+)/i); return m ? m[1] : null; };
     const confirmBlacklistSubject = (a: Assignment) => {
       showCustomConfirm(`确定要拉黑科目"${a.subject}"吗？`, async () => {
         const cid = extractCourseID(a.url);
-        if (!cid) { showToast('error', 'Error', '无法解析 courseId'); return; }
+        if (!cid) throw new Error('该作业缺少课程链接，无法识别科目');
         await api.addToBlacklist(cid);
         showToast('success', 'Success', `"${a.subject}"已加入黑名单`);
         await service.fetchAssignments(false);
@@ -283,7 +303,7 @@ export default defineComponent({
       filtersActive, clearFilters, compactView, setCompactView,
       showAddTodoModal, addingTodo, newTodo, closeAddTodoModal, onAddTodo,
       showPreviewModal, previewItem, openPreview, closePreviewModal, openAssignmentUrl,
-      showConfirmModal, confirmMessage, onConfirmAction, onCancelConfirm,
+      showConfirmModal, confirmMessage, confirmBusy, onConfirmAction, onCancelConfirm,
       showStatisticsModal, currentStatType, filteredStatItems, openStatModal, closeStatModal,
       handleGridRefresh, showRecycleBinModal, openRecycleBin, onPermanentDelete,
       restoringAllRecycle, onRestoreAll,
@@ -301,6 +321,12 @@ export default defineComponent({
   padding-bottom: 80px;
   min-height: 100vh;
 }
+
+.section-heading { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; padding: 12px 24px 20px; }
+.section-eyebrow { font-size: 10px; letter-spacing: 0.18em; color: var(--text-tertiary); font-weight: 600; }
+.section-heading h2 { font-size: 22px; font-weight: 600; margin-top: 5px; letter-spacing: -0.03em; }
+.result-count { font-size: 12px; color: var(--text-tertiary); padding-bottom: 3px; }
+@media (max-width: 768px) { .section-heading { padding: 12px 16px 16px; } }
 
 .footer {
   text-align: center;

@@ -97,6 +97,7 @@ export function useModal(options: UseModalOptions): UseModalReturn {
   }
 
   function handleKeydown(event: KeyboardEvent): void {
+    if (openStack[openStack.length - 1] !== token) return
     if (event.key === 'Escape' && options.closable.value) {
       event.preventDefault()
       event.stopPropagation()

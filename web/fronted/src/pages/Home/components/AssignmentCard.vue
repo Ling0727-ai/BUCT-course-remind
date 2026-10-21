@@ -6,8 +6,8 @@
     tabindex="0"
     :aria-label="cardAriaLabel"
     @click="$emit('open-url', assignment)"
-    @keydown.enter.prevent="$emit('open-url', assignment)"
-    @keydown.space.prevent="$emit('open-url', assignment)"
+    @keydown.enter.self.prevent="$emit('open-url', assignment)"
+    @keydown.space.self.prevent="$emit('open-url', assignment)"
   >
     <div v-if="assignment.type === '待办' && assignment.priority"
          :class="['priority-dot', assignment.priority]"
@@ -43,21 +43,10 @@
 
       <div class="actions" @click.stop>
         <template v-if="!assignment.completed">
-          <button v-if="assignment.type !== '待办'"
-                  type="button"
-                  class="act-btn blacklist" :aria-label="`拉黑科目 ${assignment.subject}`" title="拉黑此科目"
-                  @click="$emit('blacklist-subject', assignment)">
-            <i class="fas fa-ban" aria-hidden="true"></i>
-          </button>
           <button type="button"
                   class="act-btn remind" :aria-label="`为 ${assignment.title} 设置提醒`" title="设置提醒"
                   @click="$emit('set-reminder', assignment)">
             <i class="fas fa-bell" aria-hidden="true"></i>
-          </button>
-          <button type="button"
-                  class="act-btn delete" :aria-label="`删除 ${assignment.title}`" title="删除"
-                  @click="$emit('delete-assignment', assignment)">
-            <i class="fas fa-trash" aria-hidden="true"></i>
           </button>
           <button type="button"
                   class="act-btn done" :aria-label="`标记 ${assignment.title} 为完成`" title="标记完成"
@@ -78,22 +67,26 @@
             <i v-if="!assignment.undoing" class="fas fa-undo" aria-hidden="true"></i>
             <i v-else class="fas fa-spinner fa-spin" aria-hidden="true"></i>
           </button>
-          <button type="button"
-                  class="act-btn delete" :aria-label="`删除 ${assignment.title}`" title="删除"
-                  @click="$emit('delete-assignment', assignment)">
-            <i class="fas fa-trash" aria-hidden="true"></i>
-          </button>
         </template>
+        <details ref="menu" class="card-menu" @keydown.esc.stop.prevent="closeMenu(true)">
+          <summary class="act-btn" :aria-label="`${assignment.title} 的更多操作`" title="更多操作"><i class="fas fa-ellipsis-h" aria-hidden="true"></i></summary>
+          <div class="card-menu-panel">
+            <button v-if="assignment.type !== '待办'" type="button" :aria-label="`拉黑科目 ${assignment.subject}`" @click="closeMenu(true); $emit('blacklist-subject', assignment)"><i class="fas fa-ban" aria-hidden="true"></i> 拉黑此科目</button>
+            <button type="button" class="danger" :aria-label="`删除 ${assignment.title}`" @click="closeMenu(true); $emit('delete-assignment', assignment)"><i class="fas fa-trash" aria-hidden="true"></i> 移至回收站</button>
+          </div>
+        </details>
       </div>
     </div>
   </div>
 </template>
 
 <script lang="ts">
-import { computed, defineComponent } from 'vue'
+import { computed, defineComponent, ref, onMounted, onUnmounted } from 'vue'
 import type { PropType } from 'vue'
 import type { Assignment } from '../home.data'
 import { parseDueDate } from '@/utils/datetime'
+import { getAssignmentStatus } from '@/utils/assignment-status'
+import { useTaskClock } from '@/composables/useTaskClock'
 
 type CardStatus = 'urgent' | 'warning' | 'normal' | 'completed'
 
@@ -127,19 +120,21 @@ export default defineComponent({
   },
   emits: ['open-url', 'show-preview', 'set-reminder', 'delete-assignment', 'mark-completed', 'undo-completed', 'blacklist-subject'],
   setup(props) {
-    const getDaysUntilDue = (dueDate?: string): number => {
-      if (!dueDate) return Infinity
-      const due = parseDueDate(dueDate)
-      if (!due || Number.isNaN(due.getTime())) return 7
-      return Math.ceil((due.getTime() - Date.now()) / 86400000)
+    const now = useTaskClock()
+    const menu = ref<HTMLDetailsElement | null>(null)
+    const closeMenu = (restoreFocus = false) => {
+      if (!menu.value?.open) return
+      menu.value.open = false
+      if (restoreFocus) menu.value.querySelector('summary')?.focus()
     }
-
+    const outside = (event: MouseEvent) => {
+      if (!menu.value?.contains(event.target as Node)) closeMenu()
+    }
+    onMounted(() => document.addEventListener('click', outside, true))
+    onUnmounted(() => document.removeEventListener('click', outside, true))
     const cardStatus = computed<CardStatus>(() => {
       if (props.assignment.completed) return 'completed'
-      const days = getDaysUntilDue(props.assignment.dueDate)
-      if (days <= 2) return 'urgent'
-      if (days <= 7) return 'warning'
-      return 'normal'
+      return getAssignmentStatus(props.assignment, now.value)
     })
 
     const statusIcon = computed(() => STATUS_ICONS[cardStatus.value])
@@ -165,7 +160,7 @@ export default defineComponent({
       if (!dueDate) return ''
       const date = parseDueDate(dueDate)
       if (!date || Number.isNaN(date.getTime())) return ''
-      const diff = date.getTime() - Date.now()
+      const diff = date.getTime() - now.value
       if (diff < 0) {
         const d = Math.floor(Math.abs(diff) / 86400000)
         const h = Math.floor(Math.abs(diff) / 3600000) % 24
@@ -196,6 +191,7 @@ export default defineComponent({
     })
 
     return {
+      menu, closeMenu,
       cardStatus,
       statusIcon,
       statusLabel,
@@ -209,24 +205,36 @@ export default defineComponent({
 </script>
 
 <style scoped>
+.card:has(.card-menu[open]) { z-index: 5; }
+.card-menu { position: relative; }
+.card-menu summary { list-style: none; }
+.card-menu summary::-webkit-details-marker { display: none; }
+.card-menu[open] summary { color: var(--primary); background: var(--primary-subtle); }
+.card-menu-panel { position: absolute; right: 0; bottom: calc(100% + 8px); width: 168px; padding: 6px; border: 1px solid var(--border); border-radius: 12px; background: rgba(var(--surface-rgb), 1); box-shadow: var(--shadow-lg); z-index: 6; }
+.card-menu-panel button { display: flex; align-items: center; gap: 10px; width: 100%; min-height: 44px; padding: 8px 12px; border: 0; border-radius: 8px; background: transparent; color: var(--text-secondary); font-size: 13px; cursor: pointer; text-align: left; }
+.card-menu-panel button:hover { background: var(--gray-100); }
+.card-menu-panel button.danger { color: var(--red); }
 /* ── Card Base ── */
 .card {
   position: relative;
   display: flex;
   flex-direction: column;
   min-height: 0;
-  padding: var(--space-5);
+  padding: 24px;
   background: var(--bg);
   border: 1px solid var(--border);
-  border-left: 4px solid var(--primary);
+  border-left: 3px solid var(--primary);
   border-radius: var(--radius-lg);
-  transition: all var(--transition);
+  box-shadow: 0 3px 16px rgba(30, 60, 80, 0.025);
+  transition: transform 240ms ease, box-shadow 240ms ease, border-color 240ms ease;
 }
 
 .card:hover {
   box-shadow: var(--shadow-lg);
   border-color: var(--gray-200);
 }
+
+@media (hover: hover) { .card:hover { transform: translateY(-4px); } }
 
 .card:focus-visible {
   outline: 2px solid var(--primary);
@@ -291,8 +299,8 @@ export default defineComponent({
   padding: 3px 10px;
   font-size: var(--font-xs);
   font-weight: var(--font-semibold);
-  color: var(--text-white);
-  background: var(--primary);
+  color: var(--primary-dark);
+  background: var(--primary-subtle);
   border-radius: var(--radius-full);
   white-space: nowrap;
   overflow: hidden;
@@ -301,7 +309,8 @@ export default defineComponent({
 }
 
 .card[data-type="待办"] .tag-subject {
-  background: var(--purple);
+  color: var(--purple);
+  background: var(--purple-subtle);
 }
 
 .tag-type {

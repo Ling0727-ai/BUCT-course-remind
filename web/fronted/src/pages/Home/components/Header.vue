@@ -1,8 +1,9 @@
 <template>
   <header class="header">
     <div class="header-left">
-      <h1>作业管理系统</h1>
-      <p>汇总所有科目作业，不错过任何截止日期</p>
+      <span class="brand-note"><span class="brand-dot"></span> BUCT · 学习日常</span>
+      <h1>让学习，有条不紊。</h1>
+      <p>把任务安排好，给自己多一点从容。</p>
     </div>
 
     <div class="header-right">
@@ -117,14 +118,17 @@ export default defineComponent({
   justify-content: space-between;
   gap: var(--space-4);
   margin: 0 0 var(--space-4);
-  padding: var(--space-5) var(--space-6);
-  background: var(--bg);
-  border-bottom: 1px solid var(--border);
+  padding: 38px var(--space-6) 28px;
+  background: transparent;
 }
+
+.brand-note { display: inline-flex; align-items: center; gap: 7px; font-size: 11px; letter-spacing: 0.1em; color: var(--text-tertiary); margin-bottom: 14px; }
+.brand-dot { width: 7px; height: 7px; border-radius: 50%; background: #1b9b8b; box-shadow: 0 0 0 4px rgba(27,155,139,.1); }
 
 .header-left h1 {
   margin-bottom: 2px;
-  font-size: var(--font-xl);
+  font-size: clamp(24px, 3vw, 32px);
+  letter-spacing: -0.04em;
   font-weight: var(--font-bold);
   color: var(--text-primary);
 }

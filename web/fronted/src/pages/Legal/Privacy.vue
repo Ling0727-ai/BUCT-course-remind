@@ -79,7 +79,7 @@
         <h2>十、联系方式</h2>
         <p>针对本隐私政策或个人信息保护事宜，欢迎通过以下方式反馈：</p>
         <ul>
-          <li>电子邮箱：<a href="mailto:buct_course_remind@163.com">buct_course_remind@163.com</a></li>
+          <li>电子邮箱：<a href="mailto:lingxin@lingxin.org">lingxin@lingxin.org</a></li>
           <li>GitHub：<a href="https://github.com/ling0727-ai" rel="noopener" target="_blank">ling0727-ai</a></li>
         </ul>
       </section>

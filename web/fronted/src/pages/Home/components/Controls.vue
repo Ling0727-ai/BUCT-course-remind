@@ -16,6 +16,10 @@
         </button>
       </div>
 
+      <button type="button" class="filter-toggle" :aria-expanded="filtersOpen" aria-controls="advanced-filters" @click="filtersOpen = !filtersOpen">
+        <i class="fas fa-sliders" aria-hidden="true"></i> 筛选<span v-if="activeFilterCount"> · {{ activeFilterCount }}</span>
+      </button>
+      <div id="advanced-filters" class="advanced-filters" :class="{ 'is-open': filtersOpen }">
       <label class="sr-only" for="subjectFilter">按科目筛选</label>
       <select id="subjectFilter" class="select" :value="subjectFilter" @change="$emit('update:subjectFilter', $event.target.value)">
         <option value="">全部科目</option>
@@ -25,9 +29,9 @@
       <label class="sr-only" for="statusFilter">按状态筛选</label>
       <select id="statusFilter" class="select" :value="statusFilter" @change="$emit('update:statusFilter', $event.target.value)">
         <option value="">全部状态</option>
-        <option value="urgent">紧急</option>
-        <option value="warning">即将到期</option>
-        <option value="normal">正常</option>
+        <option value="urgent">紧急（1天内，含逾期）</option>
+        <option value="warning">即将到期（1～3天内）</option>
+        <option value="normal">正常（超过3天或未设截止）</option>
         <option value="completed">已完成</option>
       </select>
 
@@ -48,17 +52,18 @@
         <i :class="compact ? 'fas fa-list' : 'fas fa-th-large'" aria-hidden="true"></i>
         <span>{{ compact ? '紧凑' : '宽松' }}</span>
       </button>
+      </div>
     </div>
 
     <!-- 统计卡同时作为快捷筛选入口：点击既看数也筛列表 -->
     <div class="stats">
       <button type="button" class="stat-card urgent" @click="$emit('show-stat-modal', 'urgent')">
         <span class="stat-num">{{ urgentCount }}</span>
-        <span class="stat-label">紧急</span>
+        <span class="stat-label">紧急 · 1天内</span>
       </button>
       <button type="button" class="stat-card warning" @click="$emit('show-stat-modal', 'warning')">
         <span class="stat-num">{{ soonCount }}</span>
-        <span class="stat-label">即将到期</span>
+        <span class="stat-label">即将到期 · 3天内</span>
       </button>
       <button type="button" class="stat-card total" @click="$emit('show-stat-modal', 'all')">
         <span class="stat-num">{{ totalCount }}</span>
@@ -77,7 +82,7 @@
 </template>
 
 <script lang="ts">
-import { defineComponent } from 'vue'
+import { computed, defineComponent, ref } from 'vue'
 import type { PropType } from 'vue'
 
 export default defineComponent({
@@ -95,28 +100,40 @@ export default defineComponent({
     compact: Boolean
   },
   emits: ['update:searchTerm', 'update:subjectFilter', 'update:statusFilter', 'update:compact', 'show-stat-modal'],
-  setup(_props, { emit }) {
+  setup(props, { emit }) {
+    const filtersOpen = ref(false)
+    const activeFilterCount = computed(() => Number(Boolean(props.subjectFilter)) + Number(Boolean(props.statusFilter)))
     const resetFilters = () => {
       emit('update:searchTerm', '')
       emit('update:subjectFilter', '')
       emit('update:statusFilter', '')
     }
-    return { resetFilters }
+    return { resetFilters, filtersOpen, activeFilterCount }
   }
 })
 </script>
 
 <style scoped>
+.advanced-filters { display: contents; }
+.filter-toggle { display: none; }
 .controls {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
   padding: 0 var(--space-6) var(--space-4);
 }
 
 .filters {
+  order: 2;
   display: flex;
   gap: var(--space-2);
   align-items: center;
   flex-wrap: wrap;
-  margin-bottom: var(--space-4);
+  margin-bottom: 0;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  background: var(--bg);
 }
 
 .search-box {
@@ -238,7 +255,8 @@ export default defineComponent({
   overflow: hidden;
   padding: var(--space-4) var(--space-3);
   font-family: inherit;
-  text-align: center;
+  text-align: left;
+  padding: 22px;
   background: var(--bg);
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
@@ -249,10 +267,11 @@ export default defineComponent({
 .stat-card::before {
   content: '';
   position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  height: 3px;
+  top: 24px;
+  right: 20px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
 }
 
 .stat-card.urgent::before { background: var(--red); }
@@ -269,7 +288,9 @@ export default defineComponent({
 .stat-num {
   display: block;
   margin-bottom: 2px;
-  font-size: var(--font-2xl);
+  font-size: 32px;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.04em;
   font-weight: var(--font-bold);
   line-height: 1.2;
 }
@@ -287,11 +308,24 @@ export default defineComponent({
 
 @media (max-width: 768px) {
   .controls { padding: 0 var(--space-4) var(--space-3); }
-  .filters { flex-direction: column; align-items: stretch; }
-  .search-box { min-width: auto; }
+  .controls { gap: 14px; }
+  .filters { flex-direction: row; align-items: center; padding: 8px; }
+  .search-box { min-width: 0; }
+  .filter-toggle { display: flex; align-items: center; justify-content: center; gap: 6px; min-height: 44px; padding: 0 12px; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--bg); color: var(--text-secondary); cursor: pointer; }
+  .filter-toggle[aria-expanded="true"] { color: var(--primary); border-color: var(--primary); }
+  .advanced-filters { display: none; }
+  .advanced-filters.is-open { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; width: 100%; padding-top: 8px; border-top: 1px solid var(--border); }
   .select,
   .reset-btn,
   .view-toggle { width: 100%; justify-content: center; }
-  .stats { grid-template-columns: repeat(2, 1fr); }
+  .stats { grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 8px; }
+  .stat-card { grid-column: span 3; }
+  .stat-card.total, .stat-card.completed, .stat-card.todos { grid-column: span 2; display: flex; flex-direction: row-reverse; justify-content: center; align-items: baseline; gap: 6px; padding: 10px 4px; background: transparent; border-color: transparent; box-shadow: none; }
+  .stat-card.total::before, .stat-card.completed::before, .stat-card.todos::before { display: none; }
+  .stat-card.total .stat-num, .stat-card.completed .stat-num, .stat-card.todos .stat-num { font-size: 16px; }
+  .stat-card { padding: 16px 12px; }
+  .stat-card::before { top: 18px; right: 12px; }
+  .stat-num { font-size: 26px; }
+  .stat-label { font-size: 12px; }
 }
 </style>

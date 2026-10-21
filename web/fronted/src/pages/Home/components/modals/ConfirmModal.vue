@@ -1,6 +1,7 @@
 <template>
   <BaseModal
     :model-value="show"
+    :closable="!busy"
     title="确认操作"
     icon="fas fa-exclamation-triangle"
     tone="warning"
@@ -11,8 +12,8 @@
     <p class="confirm-message">{{ message }}</p>
 
     <template #footer>
-      <button type="button" class="btn btn-secondary" @click="$emit('cancel')">取消</button>
-      <button type="button" class="btn btn-danger" @click="$emit('confirm')" data-autofocus>确定</button>
+      <button type="button" class="btn btn-secondary" :disabled="busy" @click="$emit('cancel')">取消</button>
+      <button type="button" class="btn btn-danger" :disabled="busy" @click="$emit('confirm')" data-autofocus>{{ busy ? '处理中…' : '确定' }}</button>
     </template>
   </BaseModal>
 </template>
@@ -26,6 +27,7 @@ export default defineComponent({
   components: { BaseModal },
   props: {
     show: { type: Boolean, default: false },
+    busy: { type: Boolean, default: false },
     message: { type: String, default: '' }
   },
   emits: ['confirm', 'cancel'],

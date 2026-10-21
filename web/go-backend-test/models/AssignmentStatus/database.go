@@ -111,9 +111,22 @@ func (r *MongoAssignmentStatusRepository) UpdateStatus(
 		doc["todo_expires_at"] = *todoExpiresAt
 	}
 
+	// Clear expiry fields left by a previous completed status; otherwise MongoDB
+	// can expire a deleted record and make the assignment reappear.
+	unset := bson.M{}
+	if expiresAt == nil {
+		unset["expires_at"] = ""
+	}
+	if todoExpiresAt == nil {
+		unset["todo_expires_at"] = ""
+	}
+	update := bson.M{"$set": doc}
+	if len(unset) > 0 {
+		update["$unset"] = unset
+	}
 	_, err := r.collection.UpdateOne(ctx,
 		bson.M{"user_id": userID, "assignment_id": assignmentID},
-		bson.M{"$set": doc},
+		update,
 		options.Update().SetUpsert(true),
 	)
 	return err
@@ -241,8 +254,7 @@ func (r *MongoAssignmentStatusRepository) GetDeletedIDs(userID string) ([]string
 	cursor, err := r.collection.Find(ctx,
 		bson.M{
 			"user_id": userID,
-			"status":  StatusDeleted,
-			"forever": bson.M{"$ne": 0},
+			"status":  bson.M{"$in": bson.A{StatusDeleted, StatusPermanentDeleted}},
 		},
 		options.Find().SetProjection(bson.M{"assignment_id": 1}),
 	)

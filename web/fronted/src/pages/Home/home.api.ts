@@ -46,5 +46,5 @@ export const getDeletedAssignments = () => http.get<DeletedAssignmentsResponse>(
 export const getDeletedTodos = () => http.get<DeletedTodosResponse>('/todos/deleted');
 
 // Blacklist
-export const addToBlacklist = (subject: string) => http.post('/blacklist/add', {subject});
+export const addToBlacklist = (subjectId: string) => http.post('/blacklist', {subject_id: subjectId});
 

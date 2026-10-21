@@ -2,6 +2,8 @@ import { ref, computed, onMounted, onUnmounted } from 'vue';
 import { useRouter } from 'vue-router';
 import { useToast } from '@/composables/useToast';
 import * as api from './home.api';
+import { getAssignmentStatus } from '@/utils/assignment-status';
+import { useTaskClock } from '@/composables/useTaskClock';
 import {
     Assignment,
     AssignmentRaw,
@@ -44,6 +46,7 @@ function normalizeTodosPayload(payload: Todo[] | TodosResponse): Todo[] {
 }
 
 export function useHomeService() {
+    const taskNow = useTaskClock();
     const router = useRouter();
     const { showToast } = useToast();
 
@@ -75,25 +78,9 @@ export function useHomeService() {
         return new Date(s);
     };
 
-    const getDaysUntilDue = (dueDate: string | undefined) => {
-        try {
-            if (!dueDate) return Infinity;
-            const now = new Date();
-            const due = parseDate(dueDate);
-            if (!due || isNaN(due.getTime())) return 7;
-            return Math.ceil((due.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
-        } catch {
-            return 7;
-        }
-    };
-
     const assignmentStatus = (item: Assignment): AssignmentStatus => {
         if (item.completed) return 'completed';
-        const days = getDaysUntilDue(item.dueDate);
-        if (days < 0) return 'urgent';
-        if (days <= 2) return 'urgent';
-        if (days <= 7) return 'warning';
-        return 'normal';
+        return getAssignmentStatus(item, taskNow.value);
     };
 
     // --- Computed ---
@@ -262,6 +249,7 @@ export function useHomeService() {
             showToast('success', 'Deleted', `${item.title} 已移至回收站`);
         } catch (e: unknown) {
             showToast('error', 'Error', getErrorMessage(e, '删除失败'));
+            throw e;
         }
     };
 
@@ -461,6 +449,8 @@ export function useHomeService() {
     };
 
     return {
+        allItems,
+        assignmentStatus,
         user,
         currentTime,
         loading,

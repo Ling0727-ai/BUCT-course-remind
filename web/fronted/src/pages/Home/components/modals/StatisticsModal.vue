@@ -40,8 +40,8 @@ import AssignmentCard from '../AssignmentCard.vue'
 import type { Assignment } from '../../home.data'
 
 const STAT_TITLES: Record<string, string> = {
-  urgent: '紧急作业',
-  warning: '即将到期',
+  urgent: '紧急作业（1天内，含逾期）',
+  warning: '即将到期（1～3天内）',
   completed: '已完成',
   todos: '待办事项',
   all: '全部作业'

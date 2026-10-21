@@ -89,6 +89,8 @@
 </template>
 
 <script lang="ts">
+import { getAssignmentStatus } from '@/utils/assignment-status'
+import { useTaskClock } from '@/composables/useTaskClock'
 import { computed, defineComponent } from 'vue'
 import type { PropType } from 'vue'
 import BaseModal from '@/components/BaseModal.vue'
@@ -138,6 +140,7 @@ export default defineComponent({
   },
   emits: ['close', 'open-url'],
   setup(props, { emit }) {
+    const now = useTaskClock()
     const onUpdate = (value: boolean) => {
       if (!value) {
         emit('close')
@@ -147,11 +150,7 @@ export default defineComponent({
     const assignmentStatus = computed<AssignmentStatus>(() => {
       const item = props.item
       if (!item) return 'normal'
-      if (item.completed) return 'completed'
-      const days = getDaysUntilDue(item.dueDate)
-      if (days <= 2) return 'urgent'
-      if (days <= 7) return 'warning'
-      return 'normal'
+      return getAssignmentStatus(item, now.value)
     })
 
     const statusIcon = computed(() => STATUS_ICONS[assignmentStatus.value])

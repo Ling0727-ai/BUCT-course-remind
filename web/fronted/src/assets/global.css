@@ -1,8 +1,8 @@
 /* ─── 设计系统 ─── */
 :root {
   /* 主色 - 用于交互元素和链接，不做大面积背景 */
-  --primary: #3b82f6;
-  --primary-dark: #2563eb;
+  --primary: #3976df;
+  --primary-dark: #245ab7;
   --primary-light: #60a5fa;
   --primary-subtle: rgba(59, 130, 246, 0.08);
 
@@ -45,7 +45,7 @@
   --bg-tertiary: #f3f4f6;
 
   /* 边框 */
-  --border: #e5e7eb;
+  --border: #e5ebf1;
   --border-focus: var(--primary);
 
   /* 阴影 - 柔和自然 */
@@ -55,10 +55,10 @@
   --shadow-xl: 0 8px 24px rgba(0, 0, 0, 0.1);
 
   /* 圆角 */
-  --radius-sm: 6px;
-  --radius-md: 8px;
-  --radius-lg: 12px;
-  --radius-xl: 16px;
+  --radius-sm: 9px;
+  --radius-md: 12px;
+  --radius-lg: 18px;
+  --radius-xl: 24px;
   --radius-full: 9999px;
 
   /* 间距 */
@@ -138,6 +138,7 @@ html[data-bg-preset="none"] body {
 
 /* ─── 深色模式全局变量覆盖 ─── */
 html[data-bg-preset="dark"] {
+  --primary-dark: #93b8ff;
   --text-primary: #e2e8f0;
   --text-secondary: #cbd5e1;
   --text-tertiary: #94a3b8;

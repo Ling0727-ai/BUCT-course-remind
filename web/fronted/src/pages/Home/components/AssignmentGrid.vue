@@ -20,8 +20,8 @@
     </div>
 
     <!-- Grid -->
-    <div v-else class="grid" :class="{ 'grid-compact': compact }">
-      <div v-if="assignments.length === 0" class="state empty">
+    <div v-else class="task-board">
+      <div v-if="assignments.length === 0" key="empty" class="state empty">
         <i class="fas fa-inbox" aria-hidden="true"></i>
         <h3>{{ emptyTitle }}</h3>
         <p>{{ emptyHint }}</p>
@@ -29,8 +29,17 @@
           清除筛选条件
         </button>
       </div>
-      <AssignmentCard
-        v-for="a in assignments" :key="a.id"
+      <section v-for="group in groups" :key="group.key" class="task-group" :class="group.key">
+        <h3 class="group-heading">
+          <button v-if="group.key === 'completed'" type="button" class="group-toggle" :aria-expanded="completedOpen" aria-controls="completed-tasks" @click="completedOpen = !completedOpen">
+            <i :class="completedOpen ? 'fas fa-chevron-down' : 'fas fa-chevron-right'" aria-hidden="true"></i>
+            {{ group.label }} <span>{{ group.items.length }}</span>
+          </button>
+          <template v-else>{{ group.label }} <span>{{ group.items.length }}</span><small>{{ group.hint }}</small></template>
+        </h3>
+        <TransitionGroup v-if="group.key !== 'completed' || completedOpen" :id="group.key === 'completed' ? 'completed-tasks' : undefined" name="assignment" tag="div" class="grid" :class="{ 'grid-compact': compact }">
+        <AssignmentCard
+        v-for="a in group.items" :key="a.id"
         :assignment="a"
         @open-url="$emit('open-url', $event)"
         @show-preview="$emit('show-preview', $event)"
@@ -40,6 +49,9 @@
         @undo-completed="$emit('undo-completed', $event)"
         @blacklist-subject="$emit('blacklist-subject', $event)"
       />
+        </TransitionGroup>
+        <p v-if="group.key !== 'completed' && !group.items.length" class="column-empty">暂无{{ group.label }}任务</p>
+      </section>
     </div>
 
     <!-- 后台刷新指示：不遮挡已有列表 -->
@@ -51,7 +63,10 @@
 </template>
 
 <script lang="ts">
-import { defineComponent } from 'vue'
+import { computed, defineComponent, ref, watch } from 'vue'
+import { parseDueDate } from '@/utils/datetime'
+import { getAssignmentStatus } from '@/utils/assignment-status'
+import { useTaskClock } from '@/composables/useTaskClock'
 import type { PropType } from 'vue'
 import AssignmentCard from './AssignmentCard.vue'
 import type { Assignment } from '../home.data'
@@ -67,11 +82,35 @@ export default defineComponent({
     compact: { type: Boolean, default: false },
     /** 是否有筛选条件生效，用于给出"清除筛选"出口。 */
     filtersActive: { type: Boolean, default: false },
+    statusFilter: { type: String, default: '' },
     emptyTitle: { type: String, default: '暂无作业' },
     emptyHint: { type: String, default: '没有找到符合条件的作业' },
     skeletonCount: { type: Number, default: 6 }
   },
-  emits: ['refresh', 'clear-filters', 'open-url', 'show-preview', 'set-reminder', 'delete-assignment', 'mark-completed', 'undo-completed', 'blacklist-subject']
+  emits: ['refresh', 'clear-filters', 'open-url', 'show-preview', 'set-reminder', 'delete-assignment', 'mark-completed', 'undo-completed', 'blacklist-subject'],
+  setup(props) {
+    const completedOpen = ref(false)
+    watch(() => props.statusFilter, value => { if (value === 'completed') completedOpen.value = true }, { immediate: true })
+    const now = useTaskClock()
+    const deadline = (a: Assignment) => {
+      const value = a.dueDate ? parseDueDate(a.dueDate)?.getTime() : undefined
+      return value !== undefined && Number.isFinite(value) ? value : Infinity
+    }
+    const groups = computed(() => {
+      if (!props.assignments.length) return []
+      const buckets = [
+        { key: 'urgent', label: '紧急', hint: '1天内 · 含逾期', items: [] as Assignment[] },
+        { key: 'warning', label: '即将到期', hint: '1～3天内', items: [] as Assignment[] },
+        { key: 'normal', label: '正常', hint: '超过3天 · 或未设截止', items: [] as Assignment[] },
+        { key: 'completed', label: '已完成', hint: '', items: [] as Assignment[] }
+      ]
+      for (const item of [...props.assignments].sort((a, b) => deadline(a) - deadline(b))) {
+        buckets.find(group => group.key === getAssignmentStatus(item, now.value))?.items.push(item)
+      }
+      return buckets.filter(group => group.key !== 'completed' || group.items.length)
+    })
+    return { groups, completedOpen }
+  }
 })
 </script>
 
@@ -79,9 +118,27 @@ export default defineComponent({
 .content {
   padding: 0 var(--space-6) var(--space-8);
 }
+.task-board { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; align-items: start; }
+.task-group { min-width: 0; padding: 14px 10px; border-top: 3px solid var(--border); border-radius: 12px; background: var(--primary-subtle); }
+.task-group.urgent { border-top-color: var(--red); background: var(--red-subtle); }
+.task-group.warning { border-top-color: var(--orange); background: var(--orange-subtle); }
+.task-group.normal { border-top-color: var(--primary); }
+.task-group.completed { grid-column: 1 / -1; background: transparent; }
+.task-group:not(.completed) .grid { grid-template-columns: minmax(0, 1fr); gap: 12px; }
+.task-group:not(.completed) :deep(.card-foot) { flex-wrap: wrap; }
+.task-group:not(.completed) :deep(.actions) { margin-left: auto; }
+.task-group :deep(.grid-compact .card) { padding: 16px; }
+.task-board > .state { grid-column: 1 / -1; }
+.group-heading { flex-wrap: wrap; }
+.group-heading small { width: 100%; font-weight: 400; font-size: 11px; color: var(--text-tertiary); }
+.column-empty { padding: 24px 8px; text-align: center; font-size: 12px; color: var(--text-tertiary); }
+.group-heading { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; font-size: 14px; font-weight: 600; color: var(--text-secondary); }
+.group-heading span { font-size: 12px; font-weight: 400; color: var(--text-tertiary); }
+.group-toggle { display: flex; align-items: center; gap: 8px; min-height: 44px; border: 0; background: transparent; color: inherit; font: inherit; cursor: pointer; }
 
 /* 宽松视图（默认）：卡片更宽、留白更大、描述多显示一行。 */
 .grid {
+  position: relative;
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(min(440px, 100%), 1fr));
   gap: var(--space-6);
@@ -193,6 +250,7 @@ export default defineComponent({
 }
 
 @media (max-width: 768px) {
+  .task-board { grid-template-columns: minmax(0, 1fr); }
   .content { padding: 0 var(--space-4) var(--space-6); }
   .grid { grid-template-columns: 1fr; gap: var(--space-3); }
   .grid-compact { grid-template-columns: 1fr; }
