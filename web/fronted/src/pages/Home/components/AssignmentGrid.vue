@@ -20,7 +20,7 @@
     </div>
 
     <!-- Grid -->
-    <div v-else class="task-board">
+    <div v-else class="task-board" :style="{ '--task-columns': Math.max(1, groups.filter(group => group.key !== 'completed').length) }">
       <div v-if="assignments.length === 0" key="empty" class="state empty">
         <i class="fas fa-inbox" aria-hidden="true"></i>
         <h3>{{ emptyTitle }}</h3>
@@ -50,7 +50,6 @@
         @blacklist-subject="$emit('blacklist-subject', $event)"
       />
         </TransitionGroup>
-        <p v-if="group.key !== 'completed' && !group.items.length" class="column-empty">暂无{{ group.label }}任务</p>
       </section>
     </div>
 
@@ -107,7 +106,7 @@ export default defineComponent({
       for (const item of [...props.assignments].sort((a, b) => deadline(a) - deadline(b))) {
         buckets.find(group => group.key === getAssignmentStatus(item, now.value))?.items.push(item)
       }
-      return buckets.filter(group => group.key !== 'completed' || group.items.length)
+      return buckets.filter(group => group.items.length > 0)
     })
     return { groups, completedOpen }
   }
@@ -118,7 +117,7 @@ export default defineComponent({
 .content {
   padding: 0 var(--space-6) var(--space-8);
 }
-.task-board { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; align-items: start; }
+.task-board { display: grid; grid-template-columns: repeat(var(--task-columns, 3), minmax(0, 1fr)); gap: 16px; align-items: start; }
 .task-group { min-width: 0; padding: 14px 10px; border-top: 3px solid var(--border); border-radius: 12px; background: var(--primary-subtle); }
 .task-group.urgent { border-top-color: var(--red); background: var(--red-subtle); }
 .task-group.warning { border-top-color: var(--orange); background: var(--orange-subtle); }
@@ -131,7 +130,6 @@ export default defineComponent({
 .task-board > .state { grid-column: 1 / -1; }
 .group-heading { flex-wrap: wrap; }
 .group-heading small { width: 100%; font-weight: 400; font-size: 11px; color: var(--text-tertiary); }
-.column-empty { padding: 24px 8px; text-align: center; font-size: 12px; color: var(--text-tertiary); }
 .group-heading { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; font-size: 14px; font-weight: 600; color: var(--text-secondary); }
 .group-heading span { font-size: 12px; font-weight: 400; color: var(--text-tertiary); }
 .group-toggle { display: flex; align-items: center; gap: 8px; min-height: 44px; border: 0; background: transparent; color: inherit; font: inherit; cursor: pointer; }
