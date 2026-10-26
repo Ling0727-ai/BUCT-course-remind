@@ -2,193 +2,185 @@ package scheduler
 
 import (
 	"context"
+	"errors"
 	"log"
 	"time"
 
+	"github.com/Ling0727-ai/go-buct-course-backend/internal/scheduling"
 	"github.com/Ling0727-ai/go-buct-course-backend/models"
-	"github.com/Ling0727-ai/go-buct-course-backend/models/Blacklist"
-	"github.com/Ling0727-ai/go-buct-course-backend/models/CourseData"
-	"github.com/Ling0727-ai/go-buct-course-backend/scraper"
+	"github.com/Ling0727-ai/go-buct-course-backend/services"
 	"go.mongodb.org/mongo-driver/bson"
+	"go.mongodb.org/mongo-driver/mongo"
+	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
-// run 调度器主循环，对应 Python _run_scheduler
-func (s *CourseDataScheduler) run() {
-	log.Println("[scheduler] 调度器已启动")
-
-	reminderTicker := time.NewTicker(ReminderCheckInterval)
-	autoReminderTicker := time.NewTicker(AutoReminderCheckInterval)
-	refreshTicker := time.NewTicker(RefreshInterval)
-	defer reminderTicker.Stop()
-	defer autoReminderTicker.Stop()
-	defer refreshTicker.Stop()
-
-	// semaphore：同一时刻最多 1 个 processDueReminders 在运行，防止 goroutine 堆积
-	reminderSem := make(chan struct{}, 1)
-	// semaphore：同一时刻最多 1 个 checkAndCreateAutoReminders 在运行
-	autoSem := make(chan struct{}, 1)
-
-	// 启动时先检查一次：只刷新"从未更新过"或"距上次超12h"的用户
-	s.runRefreshCycle()
-
-	// 启动时先检查一次自动提醒
-	go func() {
+func resetTimer(timer *time.Timer, delay time.Duration) {
+	if !timer.Stop() {
 		select {
-		case autoSem <- struct{}{}:
-			defer func() { <-autoSem }()
-			if err := checkAndCreateAutoReminders(); err != nil {
-				log.Printf("[scheduler] 启动时检查自动提醒异常: %v", err)
-			}
+		case <-timer.C:
 		default:
-			// 已有一个在运行，跳过
 		}
-	}()
+	}
+	timer.Reset(delay)
+}
 
+func (s *CourseDataScheduler) run(stop <-chan struct{}) {
+	refreshTimer := time.NewTimer(0)
+	reminderTimer := time.NewTimer(0)
+	autoTimer := time.NewTimer(0)
+	defer refreshTimer.Stop()
+	defer reminderTimer.Stop()
+	defer autoTimer.Stop()
+	reminderSem, autoSem := make(chan struct{}, 1), make(chan struct{}, 1)
+	launch := func(sem chan struct{}, task func() error) {
+		select {
+		case sem <- struct{}{}:
+			go func() {
+				defer func() { <-sem; scheduling.NotifyReminders() }()
+				if err := task(); err != nil {
+					log.Printf("[scheduler] 后台任务失败: %v", err)
+				}
+			}()
+		default:
+		}
+	}
+	launch(autoSem, checkAndCreateAutoReminders)
 	for {
 		select {
-		case <-s.stopCh:
-			log.Println("[scheduler] 调度器已停止")
+		case <-stop:
 			return
-
-		case <-refreshTicker.C:
+		case <-refreshTimer.C:
 			s.runRefreshCycle()
-
-		case <-reminderTicker.C:
-			// 非阻塞尝试获取 semaphore，拿不到说明上一轮还没跑完，直接跳过
-			go func() {
-				select {
-				case reminderSem <- struct{}{}:
-					defer func() { <-reminderSem }()
-					if err := processDueReminders(); err != nil {
-						log.Printf("[scheduler] 处理到期提醒异常: %v", err)
-					}
-				default:
-					log.Println("[scheduler] 上一轮提醒处理尚未完成，跳过本次")
-				}
-			}()
-
-		case <-autoReminderTicker.C:
-			go func() {
-				select {
-				case autoSem <- struct{}{}:
-					defer func() { <-autoSem }()
-					if err := checkAndCreateAutoReminders(); err != nil {
-						log.Printf("[scheduler] 检查自动提醒异常: %v", err)
-					}
-				default:
-					log.Println("[scheduler] 上一轮自动提醒检查尚未完成，跳过本次")
-				}
-			}()
+			refreshTimer.Reset(s.nextRefreshDelay())
+		case <-refreshScheduleChanged:
+			s.runRefreshCycle()
+			resetTimer(refreshTimer, s.nextRefreshDelay())
+		case <-reminderTimer.C:
+			launch(reminderSem, processDueReminders)
+			reminderTimer.Reset(30 * time.Second)
+		case <-autoTimer.C:
+			launch(autoSem, checkAndCreateAutoReminders)
+			autoTimer.Reset(30 * time.Second)
+		case <-scheduling.RemindersChanged:
+			resetTimer(reminderTimer, nextReminderDelay())
+			resetTimer(autoTimer, nextAutoReminderDelay())
 		}
 	}
 }
 
-// runRefreshCycle 执行一轮全量用户数据刷新，对应 Python 主循环中对 _get_users_need_refresh 的调用
+func eligibleUsers() bson.M {
+	return bson.M{
+		"student_id": bson.M{"$type": "string", "$gt": ""},
+		"s_password": bson.M{"$type": "string", "$gt": ""},
+	}
+}
+
+// Claim a bounded batch before enqueueing, so scraping never runs in the timer loop.
 func (s *CourseDataScheduler) runRefreshCycle() {
-	users, err := getUsersNeedRefresh()
-	if err != nil {
-		log.Printf("[scheduler] 获取待刷新用户列表失败: %v", err)
-		return
-	}
-	if len(users) == 0 {
-		return
-	}
-
-	log.Printf("[scheduler] 发现 %d 个用户需要刷新数据", len(users))
-	for _, userID := range users {
-		select {
-		case <-s.stopCh:
-			return
-		default:
-		}
-		if err := refreshUserData(userID); err != nil {
-			log.Printf("[scheduler] 刷新用户 %s 数据失败: %v", userID, err)
-		}
-		time.Sleep(UserRefreshGap)
-	}
-}
-
-// getUsersNeedRefresh 获取需要刷新数据的用户列表
-// 对应 Python _get_users_need_refresh
-func getUsersNeedRefresh() ([]string, error) {
 	client, err := models.ConnectToDB()
 	if err != nil {
-		return nil, err
+		log.Printf("[scheduler] 数据库连接失败: %v", err)
+		return
 	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-
-	// 查询有学号和密码的用户，对应 Python users.find({student_id, s_password exist})
 	col := client.Database("buct-course").Collection("users")
-	cursor, err := col.Find(ctx, bson.M{
-		"student_id": bson.M{"$exists": true, "$nin": bson.A{nil, ""}},
-		"s_password": bson.M{"$exists": true, "$nin": bson.A{nil, ""}},
-	})
-	if err != nil {
-		return nil, err
-	}
-	defer cursor.Close(ctx)
-
-	courseRepo := CourseData.Repository
-	threshold := RefreshInterval
-
-	var needRefresh []string
-	for cursor.Next(ctx) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	for i := 0; i < 100; i++ {
+		now := time.Now()
+		filter := eligibleUsers()
+		filter["$and"] = bson.A{
+			bson.M{"$or": bson.A{bson.M{"next_refresh_at": bson.M{"$lte": now}}, bson.M{"next_refresh_at": bson.M{"$exists": false}}}},
+			bson.M{"$or": bson.A{bson.M{"refresh_lease_until": bson.M{"$lte": now}}, bson.M{"refresh_lease_until": bson.M{"$exists": false}}}},
+		}
 		var user struct {
-			ID string `bson:"_id"`
+			ID interface{} `bson:"_id"`
 		}
-		if err = cursor.Decode(&user); err != nil {
-			continue
+		lease := now.Add(20 * time.Minute)
+		err := col.FindOneAndUpdate(ctx, filter,
+			bson.M{"$set": bson.M{"refresh_lease_until": lease}},
+			options.FindOneAndUpdate().SetSort(bson.D{{Key: "next_refresh_at", Value: 1}}).SetProjection(bson.M{"_id": 1}),
+		).Decode(&user)
+		if errors.Is(err, mongo.ErrNoDocuments) {
+			return
 		}
-
-		lastUpdate, err := courseRepo.GetLastUpdateTimeByUserID(user.ID)
-		if err != nil || lastUpdate.IsZero() {
-			needRefresh = append(needRefresh, user.ID)
-			continue
+		if err != nil {
+			log.Printf("[scheduler] 领取刷新任务失败: %v", err)
+			return
 		}
-		if time.Since(lastUpdate) >= threshold {
-			needRefresh = append(needRefresh, user.ID)
+		if err := services.TryRefreshUserDataAsync(objectIDToString(user.ID)); err != nil {
+			// A CAS prevents overwriting a successful concurrent manual refresh.
+			_, _ = col.UpdateOne(ctx, bson.M{"_id": user.ID, "refresh_lease_until": lease},
+				bson.M{"$set": bson.M{"next_refresh_at": now.Add(30 * time.Second)}, "$unset": bson.M{"refresh_lease_until": ""}})
+			return
 		}
 	}
-	return needRefresh, cursor.Err()
 }
 
-// refreshUserData 刷新指定用户的课程数据，对应 Python _refresh_user_data
-func refreshUserData(userID string) error {
-	log.Printf("[scheduler] 开始自动刷新用户 %s 的课程数据", userID)
+func delayUntil(at time.Time, ceiling time.Duration) time.Duration {
+	delay := time.Until(at)
+	if delay < time.Second {
+		return time.Second
+	}
+	if delay > ceiling {
+		return ceiling
+	}
+	return delay
+}
 
-	// 加载黑名单，在 scraper 层直接跳过被屏蔽的课程
-	blacklistedIDs, err := Blacklist.Repository.GetBlacklistedIDs(userID)
+func (s *CourseDataScheduler) nextRefreshDelay() time.Duration {
+	client, err := models.ConnectToDB()
 	if err != nil {
-		log.Printf("[scheduler] 用户 %s 获取黑名单失败，将不过滤: %v", userID, err)
-		blacklistedIDs = nil
+		return time.Minute
 	}
-
-	s := scraper.GetScraper()
-	result, err := s.GetPendingTasks(userID, blacklistedIDs)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	var next struct {
+		At time.Time `bson:"next_refresh_at"`
+	}
+	filter := eligibleUsers()
+	filter["$or"] = bson.A{bson.M{"refresh_lease_until": bson.M{"$lte": time.Now()}}, bson.M{"refresh_lease_until": bson.M{"$exists": false}}}
+	err = client.Database("buct-course").Collection("users").FindOne(ctx, filter,
+		options.FindOne().SetProjection(bson.M{"next_refresh_at": 1}).SetSort(bson.D{{Key: "next_refresh_at", Value: 1}}),
+	).Decode(&next)
+	if errors.Is(err, mongo.ErrNoDocuments) {
+		return 5 * time.Minute
+	}
 	if err != nil {
-		return err
+		return time.Minute
 	}
+	// Reconciliation discovers writes made by another backend instance.
+	return delayUntil(next.At, 5*time.Minute)
+}
 
-	tasks := make([]CourseData.TaskInput, 0, len(result.Tasks))
-	for _, t := range result.Tasks {
-		tasks = append(tasks, CourseData.TaskInput{
-			Subject:  t.Subject,
-			Title:    t.Title,
-			Deadline: t.Deadline,
-			Details:  t.Details,
-			Url:      t.URL,
-			Type:     t.Type,
-		})
-	}
+func nextReminderDelay() time.Duration {
+	return nextCollectionDelay(RemindersCollection, bson.M{"status": "scheduled"}, "scheduled_time")
+}
 
-	courseRepo := CourseData.Repository
-	saved, err := courseRepo.SaveUserCourseData(userID, tasks)
+func nextAutoReminderDelay() time.Duration {
+	return nextCollectionDelay("course_data", bson.M{
+		"auto_reminder_pending": true, "deadline_at": bson.M{"$gte": time.Now()},
+	}, "auto_reminder_at")
+}
+
+func nextCollectionDelay(collection string, filter bson.M, field string) time.Duration {
+	client, err := models.ConnectToDB()
 	if err != nil {
-		return err
+		return time.Minute
 	}
-
-	log.Printf("[scheduler] 用户 %s 自动刷新完成，保存 %d 条数据", userID, saved)
-	return nil
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	var doc bson.M
+	err = client.Database("buct-course").Collection(collection).FindOne(ctx, filter,
+		options.FindOne().SetProjection(bson.M{field: 1}).SetSort(bson.D{{Key: field, Value: 1}}),
+	).Decode(&doc)
+	if errors.Is(err, mongo.ErrNoDocuments) {
+		return 5 * time.Minute
+	}
+	if err != nil {
+		return time.Minute
+	}
+	if value, ok := doc[field].(interface{ Time() time.Time }); ok {
+		return delayUntil(value.Time(), time.Minute)
+	}
+	return time.Minute
 }

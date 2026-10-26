@@ -1,27 +1,33 @@
 package services
 
 import (
+	"context"
+	"errors"
 	"log"
+	"time"
 
+	"github.com/Ling0727-ai/go-buct-course-backend/internal/scheduling"
 	"github.com/Ling0727-ai/go-buct-course-backend/models/Blacklist"
 	"github.com/Ling0727-ai/go-buct-course-backend/models/CourseData"
 	"github.com/Ling0727-ai/go-buct-course-backend/models/User"
 	"github.com/Ling0727-ai/go-buct-course-backend/scraper"
 )
 
+var errRefreshSuperseded = errors.New("教务凭据已变更，重新安排刷新")
+
 // RefreshUserDataAsync 后台异步刷新，不阻塞调用方（用于登录后自动刷新）
 func RefreshUserDataAsync(userID string) {
-	go func() {
-		if _, err := refreshUserData(userID); err != nil {
-			log.Printf("[background] 用户 %s 异步刷新失败: %v", userID, err)
+	if err := TryRefreshUserDataAsync(userID); err != nil {
+		log.Printf("[background] 用户 %s 入队失败: %v", userID, err)
+		if retryErr := User.Repository.ScheduleRefresh(userID, time.Now().Add(30*time.Second)); retryErr == nil {
+			scheduling.NotifyRefresh()
 		}
-	}()
-	log.Printf("[background] 已启动用户 %s 的后台数据刷新 goroutine", userID)
+	}
 }
 
 // RefreshUserDataSync 同步刷新，返回保存条数，对应 Python POST /api/course-data/refresh
 func RefreshUserDataSync(userID string) (int, error) {
-	return refreshUserData(userID)
+	return RefreshUserDataContext(context.Background(), userID)
 }
 
 // refreshUserData 实际刷新逻辑，返回 (保存条数, error)
@@ -44,8 +50,7 @@ func refreshUserData(userID string) (int, error) {
 	// 加载黑名单，传给 scraper 以在抓取时直接跳过对应课程
 	blacklistedIDs, err := Blacklist.Repository.GetBlacklistedIDs(userID)
 	if err != nil {
-		log.Printf("[background] 用户 %s 获取黑名单失败，将不过滤: %v", userID, err)
-		blacklistedIDs = nil
+		return 0, err
 	}
 
 	s := scraper.GetScraper()
@@ -64,6 +69,13 @@ func refreshUserData(userID string) (int, error) {
 			Url:      t.URL,
 			Type:     t.Type,
 		})
+	}
+	current, err := User.Repository.GetUserByID(userID)
+	if err != nil {
+		return 0, err
+	}
+	if current == nil || current.StudentID != user.StudentID || current.SPassword != user.SPassword {
+		return 0, errRefreshSuperseded
 	}
 
 	saved, err := CourseData.Repository.SaveUserCourseData(userID, tasks)

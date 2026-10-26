@@ -41,6 +41,7 @@ type BUCTScraper struct {
 	timestamps map[string]int64 // Unix 秒，记录每个客户端最后使用时间
 	mu         sync.Mutex
 	lastClean  int64 // 上次清理时间（Unix 秒）
+	userLocks  map[string]*userLock
 }
 
 // 全局单例

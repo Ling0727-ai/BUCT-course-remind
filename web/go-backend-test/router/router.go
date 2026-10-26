@@ -50,6 +50,7 @@ func SetupRoutes(r *gin.Engine) {
 			assign.GET("/stats", handlers.GetAssignmentStats)
 			assign.GET("/completed", handlers.GetCompletedAssignments)
 			assign.GET("/deleted", handlers.GetDeletedAssignments)
+			assign.GET("/:id/detail", handlers.GetAssignmentDetail)
 			assign.DELETE("/clear-deleted", handlers.ClearDeletedAssignments)
 			assign.POST("/:id/complete", handlers.MarkAssignmentComplete)
 			assign.POST("/:id/uncomplete", handlers.MarkAssignmentUncomplete)

@@ -16,7 +16,7 @@ func scrapeHomework(c *buct.BUCTClient, userID string, blacklistSet map[string]b
 	hwDetails, err := c.CourseMgr.GetAllPendingHomeworkDetails()
 	if err != nil {
 		log.Printf("[scraper] 用户 %s 获取作业数据失败: %v", userID, err)
-		return nil, nil // 对应 Python: homework_courses = []
+		return nil, err
 	}
 
 	var tasks []TaskInfo
@@ -57,6 +57,7 @@ func scrapeHomework(c *buct.BUCTClient, userID string, blacklistSet map[string]b
 				tasksList, err2 := c.CourseMgr.GetHomeworkTasks(hw.DetailHref)
 				if err2 != nil {
 					log.Printf("[scraper] 获取作业任务列表失败 (href=%s): %v", hw.DetailHref, err2)
+					return nil, err2
 				} else {
 					detailsText = strings.Join(tasksList, "\n")
 				}

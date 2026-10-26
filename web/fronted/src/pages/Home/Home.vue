@@ -212,8 +212,24 @@ export default defineComponent({
 
     const showPreviewModal = ref(false);
     const previewItem = ref<Assignment | null>(null);
-    const openPreview = (item: Assignment) => { previewItem.value = item; showPreviewModal.value = true; };
-    const closePreviewModal = () => { showPreviewModal.value = false; previewItem.value = null; };
+    let previewRequest = 0;
+    const openPreview = async (item: Assignment) => {
+      const request = ++previewRequest;
+      showPreviewModal.value = true;
+      previewItem.value = { ...item };
+      if (item.type === '待办') return;
+      previewItem.value.description = '正在加载详情…';
+      try {
+        const detail = await api.getAssignmentDetail(item.id);
+        if (request === previewRequest && previewItem.value) previewItem.value.description = detail.description;
+      } catch {
+        if (request === previewRequest && previewItem.value) {
+          previewItem.value.description = '详情加载失败，请稍后重试';
+          showToast('error', '加载失败', '未能获取作业详情');
+        }
+      }
+    };
+    const closePreviewModal = () => { ++previewRequest; showPreviewModal.value = false; previewItem.value = null; };
     const openAssignmentUrl = (item: Assignment) => { if (item.url?.trim()) window.open(item.url, '_blank'); };
 
     const showConfirmModal = ref(false);

@@ -1,11 +1,14 @@
 package handlers
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"time"
 
 	"github.com/Ling0727-ai/go-buct-course-backend/models/CourseData"
+	"github.com/Ling0727-ai/go-buct-course-backend/models/User"
 	"github.com/Ling0727-ai/go-buct-course-backend/services"
 	"github.com/gin-gonic/gin"
 )
@@ -17,12 +20,9 @@ func RefreshCourseData(c *gin.Context) {
 		return
 	}
 
-	count, err := services.RefreshUserDataSync(userID)
+	count, err := services.RefreshUserDataContext(c.Request.Context(), userID)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"success": false,
-			"error":   "刷新数据失败: " + err.Error(),
-		})
+		respondRefreshFailure(c, err)
 		return
 	}
 
@@ -32,6 +32,21 @@ func RefreshCourseData(c *gin.Context) {
 		"count":      count,
 		"updated_at": time.Now().Format(time.RFC3339),
 	})
+}
+
+func respondRefreshFailure(c *gin.Context, err error) {
+	if errors.Is(err, context.Canceled) {
+		return
+	}
+	status := http.StatusInternalServerError
+	if errors.Is(err, services.ErrRefreshQueueFull) {
+		status = http.StatusServiceUnavailable
+		c.Header("Retry-After", "5")
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		status = http.StatusGatewayTimeout
+	}
+	c.JSON(status, gin.H{"success": false, "error": "刷新数据失败: " + err.Error()})
 }
 
 // GetCourseDataList 从数据库获取课程数据列表
@@ -78,7 +93,10 @@ func GetCourseDataStatus(c *gin.Context) {
 
 	if hasData {
 		lastUpdateStr = lastUpdate.Format(time.RFC3339)
-		nextRefresh := lastUpdate.Add(12 * time.Hour)
+		nextRefresh := lastUpdate.Add(CourseData.AutoRefreshInterval)
+		if user, err := User.Repository.GetUserByID(userID); err == nil && user != nil && user.NextRefreshAt != nil {
+			nextRefresh = *user.NextRefreshAt
+		}
 		nextRefreshStr = nextRefresh.Format(time.RFC3339)
 		h := time.Until(nextRefresh).Hours()
 		if h < 0 {

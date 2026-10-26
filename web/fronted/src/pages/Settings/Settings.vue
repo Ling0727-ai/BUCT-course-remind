@@ -59,7 +59,7 @@
               <i v-if="refreshing" class="fas fa-spinner fa-spin"></i>
               {{ refreshing ? '刷新中...' : '手动刷新数据' }}
             </button>
-            <span class="tip">数据每12小时自动刷新一次</span>
+            <span class="tip">数据每3小时自动刷新一次</span>
           </div>
         </div>
       </section>

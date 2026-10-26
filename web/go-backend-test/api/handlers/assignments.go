@@ -5,6 +5,7 @@ import (
 	"regexp"
 	"time"
 
+	"github.com/Ling0727-ai/go-buct-course-backend/internal/deadline"
 	"github.com/Ling0727-ai/go-buct-course-backend/models/AssignmentStatus"
 	"github.com/Ling0727-ai/go-buct-course-backend/models/Blacklist"
 	"github.com/Ling0727-ai/go-buct-course-backend/models/CourseData"
@@ -34,21 +35,21 @@ func GetAssignments(c *gin.Context) {
 		return
 	}
 
-	tasks, err := CourseData.Repository.GetCourseDataByUserID(userID)
+	view, err := services.GetAssignmentSnapshot(c.Request.Context(), userID)
 	if err != nil {
 		c.JSON(utils.Defaults.Status.InternalServerError, gin.H{"success": false, "error": utils.Defaults.Assignment.GetFailed})
 		return
 	}
 
-	completedIDs := toStringSet(AssignmentStatus.Repository.GetCompletedIDs(userID))
-	deletedIDs := toStringSet(AssignmentStatus.Repository.GetDeletedIDs(userID))
-
-	// 加载黑名单 set
-	blacklistedIDs, _ := Blacklist.Repository.GetBlacklistedIDs(userID)
-	blacklistSet := make(map[string]bool, len(blacklistedIDs))
-	for _, id := range blacklistedIDs {
-		blacklistSet[id] = true
+	tasks := view.Tasks
+	if c.Query("summary") != "true" {
+		tasks, err = CourseData.Repository.GetCourseDataByUserID(userID)
+		if err != nil {
+			c.JSON(500, gin.H{"success": false, "error": "获取数据失败"})
+			return
+		}
 	}
+	completedIDs, deletedIDs, blacklistSet := view.Completed, view.Deleted, view.Blacklisted
 
 	var formatted []gin.H
 	homeworkCount, testCount := 0, 0
@@ -105,14 +106,13 @@ func GetAssignmentStats(c *gin.Context) {
 		return
 	}
 
-	tasks, err := CourseData.Repository.GetCourseDataByUserID(userID)
+	view, err := services.GetAssignmentSnapshot(c.Request.Context(), userID)
 	if err != nil {
 		c.JSON(utils.Defaults.Status.InternalServerError, gin.H{"success": false, "error": utils.Defaults.Assignment.GetStatsFailed})
 		return
 	}
 
-	completedIDs := toStringSet(AssignmentStatus.Repository.GetCompletedIDs(userID))
-	deletedIDs := toStringSet(AssignmentStatus.Repository.GetDeletedIDs(userID))
+	tasks, completedIDs, deletedIDs := view.Tasks, view.Completed, view.Deleted
 
 	now := time.Now()
 	total, completed, urgent, soon := 0, 0, 0, 0
@@ -121,13 +121,23 @@ func GetAssignmentStats(c *gin.Context) {
 		if deletedIDs[t.TaskID] {
 			continue
 		}
+		if courseID := extractCourseID(t.Url); courseID != "" && view.Blacklisted[courseID] {
+			continue
+		}
 		total++
 		if completedIDs[t.TaskID] {
 			completed++
 			continue
 		}
 		if t.Deadline != "" {
-			if dt, err := parseDeadlineStr(t.Deadline); err == nil {
+			dt := time.Time{}
+			var parseErr error
+			if t.DeadlineAt != nil {
+				dt = *t.DeadlineAt
+			} else {
+				dt, parseErr = parseDeadlineStr(t.Deadline)
+			}
+			if parseErr == nil {
 				days := int(dt.Sub(now).Hours() / 24)
 				if days <= 2 {
 					urgent++
@@ -149,6 +159,26 @@ func GetAssignmentStats(c *gin.Context) {
 		},
 		"source": "database",
 	})
+}
+
+// GetAssignmentDetail is scoped to the authenticated user and current visibility state.
+func GetAssignmentDetail(c *gin.Context) {
+	userID, ok := getUserID(c)
+	if !ok {
+		return
+	}
+	view, err := services.GetAssignmentSnapshot(c.Request.Context(), userID)
+	if err != nil {
+		c.JSON(500, gin.H{"success": false, "error": "获取详情失败"})
+		return
+	}
+	taskID := c.Param("id")
+	task, err := CourseData.Repository.GetByTaskID(userID, taskID)
+	if err != nil || view.Deleted[taskID] || view.Blacklisted[extractCourseID(task.Url)] {
+		c.JSON(404, gin.H{"success": false, "error": "作业不存在"})
+		return
+	}
+	c.JSON(200, gin.H{"success": true, "description": task.Details})
 }
 
 // GetCompletedAssignments 获取已完成的作业 ID 列表
@@ -431,19 +461,7 @@ func toStringSet(ids []string, _ error) map[string]bool {
 
 // parseDeadlineStr 解析多种格式的截止时间字符串
 func parseDeadlineStr(s string) (time.Time, error) {
-	formats := []string{
-		"2006-01-02 15:04:05",
-		"2006-01-02 15:04",
-		"2006年01月02日 15:04:05",
-		"2006-01-02T15:04:05",
-		time.RFC3339,
-	}
-	for _, f := range formats {
-		if t, err := time.ParseInLocation(f, s, time.Local); err == nil {
-			return t, nil
-		}
-	}
-	return time.Time{}, &time.ParseError{}
+	return deadline.Parse(s)
 }
 
 // calcScheduledTime 根据前端 reminderConfig 计算提醒发送时间
@@ -535,12 +553,9 @@ func RefreshAssignmentsSync(c *gin.Context) {
 		return
 	}
 
-	count, err := services.RefreshUserDataSync(userID)
+	count, err := services.RefreshUserDataContext(c.Request.Context(), userID)
 	if err != nil {
-		c.JSON(500, gin.H{
-			"success": false,
-			"error":   "刷新数据失败: " + err.Error(),
-		})
+		respondRefreshFailure(c, err)
 		return
 	}
 

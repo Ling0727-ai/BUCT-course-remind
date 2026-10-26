@@ -10,7 +10,6 @@ import {
     AssignmentStatus,
     AssignmentWithStatus,
     AssignmentsResponse,
-    CompletedAssignmentsResponse,
     ReminderConfig,
     RecycleBinItem,
     Todo,
@@ -104,29 +103,39 @@ export function useHomeService() {
         return items;
     });
 
-    const filteredAssignments = computed<AssignmentWithStatus[]>(() => {
-        return allItems.value.map(item => ({
+    const classifiedItems = computed<AssignmentWithStatus[]>(() => allItems.value.map(item => ({
             ...item,
             publisher: item.publisher || (item.type === '待办' ? '用户' : '系统'),
             url: item.url || '',
-            status: assignmentStatus(item) // Add status for easier filtering
-        })).filter(item => {
+            status: assignmentStatus(item)
+        })));
+    const filteredAssignments = computed<AssignmentWithStatus[]>(() => {
+        const search = searchTerm.value.toLowerCase();
+        return classifiedItems.value.filter(item => {
             const title = item.title || '';
             const subject = item.subject || '';
-            const search = searchTerm.value.toLowerCase();
 
             const matchesSearch = title.toLowerCase().includes(search) || subject.toLowerCase().includes(search);
             const matchesSubject = !subjectFilter.value || subject === subjectFilter.value;
-            const matchesStatus = !statusFilter.value || assignmentStatus(item) === statusFilter.value;
+            const matchesStatus = !statusFilter.value || item.status === statusFilter.value;
 
             return matchesSearch && matchesSubject && matchesStatus;
         });
     });
 
     const subjects = computed(() => Array.from(new Set(allItems.value.map(a => a.subject))));
-    const urgentCount = computed(() => allItems.value.filter(a => assignmentStatus(a) === 'urgent').length);
-    const soonCount = computed(() => allItems.value.filter(a => assignmentStatus(a) === 'warning').length);
-    const completedCount = computed(() => allItems.value.filter(a => a.completed).length);
+    const itemCounts = computed(() => {
+        const counts = { urgent: 0, warning: 0, completed: 0 };
+        for (const item of classifiedItems.value) {
+            if (item.status === 'urgent') counts.urgent++;
+            if (item.status === 'warning') counts.warning++;
+            if (item.completed) counts.completed++;
+        }
+        return counts;
+    });
+    const urgentCount = computed(() => itemCounts.value.urgent);
+    const soonCount = computed(() => itemCounts.value.warning);
+    const completedCount = computed(() => itemCounts.value.completed);
     const todoCount = computed(() => todos.value.filter(t => !t.completed).length);
     const totalCount = computed(() => allItems.value.length);
 
@@ -146,17 +155,6 @@ export function useHomeService() {
             if (assignmentsRes.status === 'fulfilled') {
                 const dataArray = normalizeAssignmentsPayload(assignmentsRes.value);
 
-                // Completed & Deleted Status
-                const completedIds = new Set<string>();
-                // let deletedIds = new Set<string>();
-
-                try {
-                     const completedRes: CompletedAssignmentsResponse = await api.getCompletedAssignments();
-                     if (Array.isArray(completedRes.completed_assignments)) {
-                         completedRes.completed_assignments.forEach((id) => completedIds.add(id));
-                     }
-                } catch (e) { console.warn('Failed to fetch completed status', e); }
-
                 assignments.value = dataArray.map((item) => {
                     const rawDeadline = item.details?.deadline || item.deadline;
                     const parsed = parseDate(rawDeadline);
@@ -167,7 +165,7 @@ export function useHomeService() {
                         description: item.details?.details_content || '',
                         dueDate: parsed ? parsed.toISOString() : undefined,
                         type: item.type === 'homework' ? '作业' : '测试',
-                        completed: item.completed || completedIds.has(item.id),
+                        completed: Boolean(item.completed),
                         url: item.details?.url || item.url || '',
                         publisher: '系统'
                     };

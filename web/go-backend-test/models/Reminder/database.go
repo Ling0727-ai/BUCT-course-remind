@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/Ling0727-ai/go-buct-course-backend/internal/scheduling"
 	"github.com/Ling0727-ai/go-buct-course-backend/models"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
@@ -47,6 +48,7 @@ func NewMongoReminderRepository() *MongoReminderRepository {
 
 // Create 创建新提醒
 func (r *MongoReminderRepository) Create(input *CreateReminderInput) (*Reminder, error) {
+	defer scheduling.NotifyReminders()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
@@ -77,13 +79,13 @@ func (r *MongoReminderRepository) GetByID(id string) (*Reminder, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	oid, err := primitive.ObjectIDFromHex(id)
-	if err != nil {
-		return nil, fmt.Errorf("无效的 ID: %s", id)
+	var key interface{} = id
+	if oid, err := primitive.ObjectIDFromHex(id); err == nil {
+		key = oid
 	}
 
 	var reminder Reminder
-	err = r.collection.FindOne(ctx, bson.M{"_id": oid}).Decode(&reminder)
+	err := r.collection.FindOne(ctx, bson.M{"_id": key}).Decode(&reminder)
 	if err == mongo.ErrNoDocuments {
 		return nil, nil
 	}
@@ -116,6 +118,7 @@ func (r *MongoReminderRepository) GetByUserID(userID string, status Status) ([]*
 
 // Delete 删除提醒（只能删除非 auto_created 的）
 func (r *MongoReminderRepository) Delete(id, userID string) error {
+	defer scheduling.NotifyReminders()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 

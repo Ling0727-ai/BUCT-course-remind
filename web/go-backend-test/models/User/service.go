@@ -55,6 +55,10 @@ func (s *UserServiceImpl) RegisterUser(username, email, password, studentId, sPa
 		CreatedAt:    now,
 		UpdatedAt:    now,
 	}
+	if studentId != "" && sPassECC != "" {
+		nextRefresh := now
+		user.NextRefreshAt = &nextRefresh
+	}
 
 	// 5. 持久化到数据库
 	if err = s.repo.CreateUser(user); err != nil {
@@ -139,6 +143,8 @@ func (s *UserServiceImpl) UpdateStudentID(id string, studentId string) (*User, e
 	}
 
 	user.StudentID = studentId
+	nextRefresh := time.Now()
+	user.NextRefreshAt, user.RefreshScheduleChanged = &nextRefresh, true
 	if err = s.repo.UpdateUser(user); err != nil {
 		return nil, err
 	}
@@ -160,6 +166,8 @@ func (s *UserServiceImpl) UpdateSPassword(id string, sPassword string) (*User, e
 	}
 
 	user.SPassword = sPassECC
+	nextRefresh := time.Now()
+	user.NextRefreshAt, user.RefreshScheduleChanged = &nextRefresh, true
 	if err = s.repo.UpdateUser(user); err != nil {
 		return nil, err
 	}

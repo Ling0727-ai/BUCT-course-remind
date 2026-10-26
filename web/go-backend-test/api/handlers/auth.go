@@ -3,10 +3,12 @@ package handlers
 import (
 	"log"
 	"strconv"
+	"time"
 
 	"github.com/Ling0727-ai/go-buct-course-backend/crypto"
 	"github.com/Ling0727-ai/go-buct-course-backend/middleware"
 	"github.com/Ling0727-ai/go-buct-course-backend/models/User"
+	"github.com/Ling0727-ai/go-buct-course-backend/scheduler"
 	"github.com/Ling0727-ai/go-buct-course-backend/services"
 	"github.com/Ling0727-ai/go-buct-course-backend/utils"
 	"github.com/gin-gonic/gin"
@@ -127,6 +129,7 @@ func Register(c *gin.Context) {
 		c.JSON(utils.Defaults.Status.Conflict, gin.H{"error": err.Error()})
 		return
 	}
+	scheduler.NotifyRefreshScheduleChanged()
 
 	c.JSON(utils.Defaults.Status.Created, gin.H{
 		"message": utils.Defaults.Auth.RegisterSuccess,
@@ -266,11 +269,15 @@ func UpdateStudentInfo(c *gin.Context) {
 			}
 		}
 	}
+	nextRefresh := time.Now()
+	user.NextRefreshAt = &nextRefresh
+	user.RefreshScheduleChanged = true
 
 	if err := User.Repository.UpdateUser(user); err != nil {
 		c.JSON(utils.Defaults.Status.InternalServerError, gin.H{"error": utils.Defaults.User.UpdateFailed})
 		return
 	}
+	scheduler.NotifyRefreshScheduleChanged()
 	c.JSON(utils.Defaults.Status.OK, gin.H{"message": utils.Defaults.Auth.StudentInfoSuccess})
 }
 

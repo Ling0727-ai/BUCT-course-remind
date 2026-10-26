@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/Ling0727-ai/go-buct-course-backend/config"
+	"github.com/Ling0727-ai/go-buct-course-backend/internal/usercache"
 	"github.com/Ling0727-ai/go-buct-course-backend/models"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
@@ -60,6 +61,7 @@ func (r *MongoAssignmentStatusRepository) UpdateStatus(
 	userID, assignmentID, title, subject, assignmentType, status string,
 	autoExpireHours *int,
 ) error {
+	defer usercache.Invalidate(userID)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
@@ -298,6 +300,7 @@ func (r *MongoAssignmentStatusRepository) IsDeleted(userID, assignmentID string)
 // ClearUserStatus 清空用户状态记录（设 forever=0 而非物理删除）
 // 对应 Python: clear_user_status
 func (r *MongoAssignmentStatusRepository) ClearUserStatus(userID string, status Status) (int64, error) {
+	defer usercache.Invalidate(userID)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
@@ -325,6 +328,7 @@ func (r *MongoAssignmentStatusRepository) ClearUserStatus(userID string, status 
 // ClearUserStatusByIDs 根据 assignmentID 列表批量物理删除状态记录
 // 对应 Python: clear_user_status_by_ids
 func (r *MongoAssignmentStatusRepository) ClearUserStatusByIDs(userID string, assignmentIDs []string) (int64, error) {
+	defer usercache.Invalidate(userID)
 	if len(assignmentIDs) == 0 {
 		return 0, nil
 	}

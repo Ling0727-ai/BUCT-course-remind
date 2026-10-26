@@ -1,6 +1,7 @@
 package scraper
 
 import (
+	"errors"
 	"fmt"
 	"log"
 	"strings"
@@ -24,23 +25,27 @@ const (
 // 对应 Python: _cleanup_expired_clients
 func (s *BUCTScraper) cleanupExpiredClients() {
 	now := time.Now().Unix()
+	s.mu.Lock()
 	if now-s.lastClean < cleanupInterval {
+		s.mu.Unlock()
 		return
 	}
 	s.lastClean = now
 
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
+	expired := make([]*buct.BUCTClient, 0)
 	for userID, ts := range s.timestamps {
-		if now-ts > clientCacheExpiry {
+		if now-ts > clientCacheExpiry && s.userLocks[userID] == nil {
 			if c, ok := s.clients[userID]; ok {
-				c.Logout()
+				expired = append(expired, c)
 				delete(s.clients, userID)
 			}
 			delete(s.timestamps, userID)
 			log.Printf("[scraper] 清理过期客户端: 用户 %s", userID)
 		}
+	}
+	s.mu.Unlock()
+	for _, c := range expired {
+		c.Logout()
 	}
 }
 
@@ -61,20 +66,27 @@ func (s *BUCTScraper) getClient(userID string) *buct.BUCTClient {
 
 // Logout 登出并清理指定用户的客户端，对应 Python: logout
 func (s *BUCTScraper) Logout(userID string) bool {
+	unlock := s.lockUser(userID)
+	defer unlock()
+	return s.logoutClient(userID)
+}
+
+func (s *BUCTScraper) logoutClient(userID string) bool {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 
 	c, ok := s.clients[userID]
 	if !ok {
+		s.mu.Unlock()
 		log.Printf("[scraper] 尝试登出未找到客户端的用户: %s", userID)
 		return false
 	}
 
+	delete(s.clients, userID)
+	delete(s.timestamps, userID)
+	s.mu.Unlock()
 	if c != nil {
 		c.Logout()
 	}
-	delete(s.clients, userID)
-	delete(s.timestamps, userID)
 	log.Printf("[scraper] 用户 %s 客户端已清理", userID)
 	return true
 }
@@ -193,6 +205,9 @@ func formatTestDeadline(s string) string {
 // 对应 Python: get_pending_tasks
 // blacklistedIDs 中的 courseId 将在抓取时直接跳过
 func (s *BUCTScraper) GetPendingTasks(userID string, blacklistedIDs []string) (*ScrapeResult, error) {
+	unlock := s.lockUser(userID)
+	defer unlock()
+	defer s.logoutClient(userID)
 	log.Printf("[scraper] 用户 %s 开始 GetPendingTasks 流程...", userID)
 
 	// 1. LOGIN
@@ -207,12 +222,6 @@ func (s *BUCTScraper) GetPendingTasks(userID string, blacklistedIDs []string) (*
 		return nil, fmt.Errorf("客户端未完全初始化，缺少 CourseMgr 或 ExamMgr")
 	}
 
-	// 确保无论如何最终都登出并清理
-	defer func() {
-		s.Logout(userID)
-		log.Printf("[scraper] 用户 %s LOGOUT 完成", userID)
-	}()
-
 	// 构建黑名单 set，O(1) 查询
 	blacklistSet := make(map[string]bool, len(blacklistedIDs))
 	for _, id := range blacklistedIDs {
@@ -220,14 +229,17 @@ func (s *BUCTScraper) GetPendingTasks(userID string, blacklistedIDs []string) (*
 	}
 
 	// 2. CHECK - 获取作业和测试（传入黑名单 set）
-	hwTasks, err := scrapeHomework(c, userID, blacklistSet)
-	if err != nil {
-		log.Printf("[scraper] 用户 %s 获取作业异常: %v", userID, err)
+	hwTasks, hwErr := scrapeHomework(c, userID, blacklistSet)
+	if hwErr != nil {
+		log.Printf("[scraper] 用户 %s 获取作业异常: %v", userID, hwErr)
 	}
 
-	testTasks, err := scrapeTests(c, userID, blacklistSet)
-	if err != nil {
-		log.Printf("[scraper] 用户 %s 获取测试异常: %v", userID, err)
+	testTasks, testErr := scrapeTests(c, userID, blacklistSet)
+	if testErr != nil {
+		log.Printf("[scraper] 用户 %s 获取测试异常: %v", userID, testErr)
+	}
+	if err := errors.Join(hwErr, testErr); err != nil {
+		return nil, err
 	}
 
 	// 3. 汇总结果

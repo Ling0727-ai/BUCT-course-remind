@@ -18,7 +18,7 @@ func scrapeTests(c *buct.BUCTClient, userID string, blacklistSet map[string]bool
 	testLids, err := c.ExamMgr.GetPendingTests()
 	if err != nil {
 		log.Printf("[scraper] 用户 %s 获取测试课程列表失败: %v", userID, err)
-		return nil, nil
+		return nil, err
 	}
 	if len(testLids) == 0 {
 		log.Printf("[scraper] 用户 %s 没有获取到任何测试课程", userID)
@@ -46,7 +46,7 @@ func scrapeTests(c *buct.BUCTClient, userID string, blacklistSet map[string]bool
 		testList, err := c.ExamMgr.GetTestList(lid)
 		if err != nil {
 			log.Printf("[scraper] 获取课程 %s 测试列表失败: %v", courseName, err)
-			continue
+			return nil, err
 		}
 
 		for i, test := range testList.List {

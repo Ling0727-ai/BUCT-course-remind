@@ -3,17 +3,21 @@ package scheduler
 import (
 	"sync"
 	"time"
+
+	"github.com/Ling0727-ai/go-buct-course-backend/internal/scheduling"
+	"github.com/Ling0727-ai/go-buct-course-backend/models/CourseData"
 )
 
+var refreshScheduleChanged = scheduling.RefreshChanged
+
+// NotifyRefreshScheduleChanged wakes the scheduler after credentials are added or changed.
+func NotifyRefreshScheduleChanged() {
+	scheduling.NotifyRefresh()
+}
+
 const (
-	// RefreshInterval 全量刷新间隔，对应 Python refresh_interval = 12h
-	RefreshInterval = 12 * time.Hour
-	// ReminderCheckInterval 到期提醒检查间隔，对应 Python reminder_check_interval = 5s
-	ReminderCheckInterval = 5 * time.Second
-	// AutoReminderCheckInterval 自动提醒生成检查间隔，对应 Python auto_reminder_check_interval = 1h
-	AutoReminderCheckInterval = 1 * time.Hour
-	// UserRefreshGap 每个用户刷新之间的间隔，避免过载
-	UserRefreshGap = 2 * time.Second
+	// RefreshInterval 每个用户成功刷新后的自动刷新间隔。
+	RefreshInterval = CourseData.AutoRefreshInterval
 
 	RemindersCollection = "scheduled_reminders"
 )
@@ -69,7 +73,7 @@ func (s *CourseDataScheduler) Start() {
 	}
 	s.running = true
 	s.stopCh = make(chan struct{})
-	go s.run()
+	go s.run(s.stopCh)
 }
 
 // Stop 停止调度器，对应 Python stop()

@@ -6,18 +6,24 @@ import (
 	"go.mongodb.org/mongo-driver/mongo"
 )
 
+const AutoRefreshInterval = 3 * time.Hour
+
 type CourseData struct {
-	ID        string    `bson:"_id,omitempty" json:"id,omitempty"`
-	UserID    string    `bson:"user_id"       json:"user_id"`
-	TaskID    string    `bson:"task_id"       json:"task_id"`
-	Subject   string    `bson:"subject"       json:"subject"`
-	Title     string    `bson:"title"         json:"title"`
-	Deadline  string    `bson:"deadline"      json:"deadline"`
-	Details   string    `bson:"details"       json:"details"`
-	Url       string    `bson:"url"           json:"url"`
-	Type      string    `bson:"type"          json:"type"`
-	CreatedAt time.Time `bson:"created_at"    json:"created_at"`
-	UpdatedAt time.Time `bson:"updated_at"    json:"updated_at"`
+	ID                  string     `bson:"_id,omitempty" json:"id,omitempty"`
+	UserID              string     `bson:"user_id"       json:"user_id"`
+	TaskID              string     `bson:"task_id"       json:"task_id"`
+	Subject             string     `bson:"subject"       json:"subject"`
+	Title               string     `bson:"title"         json:"title"`
+	Deadline            string     `bson:"deadline"      json:"deadline"`
+	Details             string     `bson:"details"       json:"details"`
+	Url                 string     `bson:"url"           json:"url"`
+	Type                string     `bson:"type"          json:"type"`
+	CreatedAt           time.Time  `bson:"created_at"    json:"created_at"`
+	UpdatedAt           time.Time  `bson:"updated_at"    json:"updated_at"`
+	DeadlineAt          *time.Time `bson:"deadline_at,omitempty" json:"-"`
+	AutoReminderAt      *time.Time `bson:"auto_reminder_at,omitempty" json:"-"`
+	AutoReminderPending bool       `bson:"auto_reminder_pending" json:"-"`
+	DeadlineNormalized  bool       `bson:"deadline_normalized" json:"-"`
 }
 
 // TaskInput 用于批量保存时的输入格式

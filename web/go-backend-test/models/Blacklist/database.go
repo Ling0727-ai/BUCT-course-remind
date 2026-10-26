@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/Ling0727-ai/go-buct-course-backend/config"
+	"github.com/Ling0727-ai/go-buct-course-backend/internal/usercache"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
@@ -29,6 +30,7 @@ func NewMongoBlacklistRepository(col *mongo.Collection) *MongoBlacklistRepositor
 
 // AddSubject 添加 subjectID 到黑名单（已存在则直接返回，幂等）
 func (r *MongoBlacklistRepository) AddSubject(userID, subjectID string) error {
+	defer usercache.Invalidate(userID)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
@@ -51,6 +53,7 @@ func (r *MongoBlacklistRepository) AddSubject(userID, subjectID string) error {
 
 // RemoveSubject 从黑名单移除 subjectID
 func (r *MongoBlacklistRepository) RemoveSubject(userID, subjectID string) error {
+	defer usercache.Invalidate(userID)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
@@ -82,15 +85,24 @@ func (r *MongoBlacklistRepository) GetBlacklist(userID string) ([]*Blacklist, er
 
 // GetBlacklistedIDs 返回用户黑名单中的所有 subjectID（用于 scraper 过滤）
 func (r *MongoBlacklistRepository) GetBlacklistedIDs(userID string) ([]string, error) {
-	list, err := r.GetBlacklist(userID)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	cursor, err := r.collection.Find(ctx, bson.M{"user_id": userID}, options.Find().SetProjection(bson.M{"subject_id": 1, "_id": 0}))
 	if err != nil {
 		return nil, err
 	}
-	ids := make([]string, 0, len(list))
-	for _, b := range list {
-		ids = append(ids, b.SubjectID)
+	defer cursor.Close(ctx)
+	ids := make([]string, 0)
+	for cursor.Next(ctx) {
+		var row struct {
+			ID string `bson:"subject_id"`
+		}
+		if err := cursor.Decode(&row); err != nil {
+			return nil, err
+		}
+		ids = append(ids, row.ID)
 	}
-	return ids, nil
+	return ids, cursor.Err()
 }
 
 // IsBlacklisted 判断 subjectID 是否在黑名单中
@@ -107,6 +119,7 @@ func (r *MongoBlacklistRepository) IsBlacklisted(userID, subjectID string) (bool
 
 // ClearBlacklist 清空用户的全部黑名单
 func (r *MongoBlacklistRepository) ClearBlacklist(userID string) error {
+	defer usercache.Invalidate(userID)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 

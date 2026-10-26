@@ -16,7 +16,8 @@ export const getUserInfo = () => http.get<User>('/auth/user-info');
 export const logout = () => http.post('/auth/logout', {});
 
 // Assignments
-export const getAssignments = () => http.get<AssignmentsResponse | AssignmentRaw[]>('/assignments/standard');
+export const getAssignments = () => http.get<AssignmentsResponse | AssignmentRaw[]>('/assignments/standard?summary=true');
+export const getAssignmentDetail = (id: string) => http.get<{ success: boolean; description: string }>(`/assignments/${encodeURIComponent(id)}/detail`);
 export const getCompletedAssignments = () => http.get<CompletedAssignmentsResponse>('/assignments/completed');
 export const markAssignmentCompleted = (id: string) => http.post(`/assignments/${id}/complete`, {});
 export const undoAssignmentCompleted = (id: string) => http.post(`/assignments/${id}/uncomplete`, {});

@@ -47,6 +47,9 @@ func LoginLocked(account string) (bool, int) {
 
 	e, ok := guard.entries[account]
 	if !ok {
+		if len(guard.entries) >= 10000 {
+			return true, 60
+		}
 		return false, 0
 	}
 
@@ -73,6 +76,9 @@ func RecordLoginFailure(account string) bool {
 
 	now := time.Now()
 	e, ok := guard.entries[account]
+	if !ok && len(guard.entries) >= 10000 {
+		return true
+	}
 	if !ok || now.Sub(e.firstFailAt) > guard.window {
 		guard.entries[account] = &failureEntry{count: 1, firstFailAt: now}
 		return false
@@ -103,7 +109,7 @@ func ResetLoginFailures(account string) {
 // gcLocked 清理长期无活动的条目，调用方须持有锁
 func (g *loginGuard) gcLocked() {
 	now := time.Now()
-	if now.Sub(g.lastGC) < time.Minute && len(g.entries) < 10000 {
+	if now.Sub(g.lastGC) < time.Minute {
 		return
 	}
 	cutoff := now.Add(-g.window - g.lockFor)

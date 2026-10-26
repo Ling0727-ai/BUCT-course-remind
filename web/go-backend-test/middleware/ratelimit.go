@@ -18,21 +18,40 @@ type rateEntry struct {
 }
 
 type rateLimiter struct {
+	shards [32]rateShard
+	limit  int
+	window time.Duration
+}
+
+type rateShard struct {
 	mu      sync.Mutex
 	entries map[string]*rateEntry
-	limit   int
-	window  time.Duration
+}
+
+func (r *rateLimiter) shard(key string) *rateShard {
+	var hash uint64 = 14695981039346656037
+	for i := 0; i < len(key); i++ {
+		hash = (hash ^ uint64(key[i])) * 1099511628211
+	}
+	return &r.shards[hash%uint64(len(r.shards))]
 }
 
 // allow 返回是否放行，以及建议的 Retry-After 秒数
 func (r *rateLimiter) allow(key string) (bool, int) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
+	shard := r.shard(key)
+	shard.mu.Lock()
+	defer shard.mu.Unlock()
+	if shard.entries == nil {
+		shard.entries = make(map[string]*rateEntry)
+	}
 
 	now := time.Now()
-	e, ok := r.entries[key]
+	e, ok := shard.entries[key]
 	if !ok || now.Sub(e.windowStart) >= r.window {
-		r.entries[key] = &rateEntry{count: 1, windowStart: now}
+		if !ok && len(shard.entries) >= 2048 {
+			return false, max(1, int(r.window.Seconds()))
+		}
+		shard.entries[key] = &rateEntry{count: 1, windowStart: now}
 		return true, 0
 	}
 
@@ -50,13 +69,19 @@ func (r *rateLimiter) allow(key string) (bool, int) {
 
 // gc 清理过期条目，避免 map 无限增长
 func (r *rateLimiter) gc() {
-	r.mu.Lock()
-	defer r.mu.Unlock()
+	for i := range r.shards {
+		r.gcShard(i)
+	}
+}
 
+func (r *rateLimiter) gcShard(index int) {
+	shard := &r.shards[index]
+	shard.mu.Lock()
+	defer shard.mu.Unlock()
 	now := time.Now()
-	for k, e := range r.entries {
+	for k, e := range shard.entries {
 		if now.Sub(e.windowStart) >= r.window {
-			delete(r.entries, k)
+			delete(shard.entries, k)
 		}
 	}
 }
@@ -65,17 +90,18 @@ func (r *rateLimiter) gc() {
 // limit 为窗口内允许的请求数，window 为窗口长度。
 func RateLimit(limit int, window time.Duration) gin.HandlerFunc {
 	rl := &rateLimiter{
-		entries: make(map[string]*rateEntry),
-		limit:   limit,
-		window:  window,
+		limit:  limit,
+		window: window,
 	}
 
 	// 后台定期清理，防止被大量不同 IP 撑爆内存
 	go func() {
-		ticker := time.NewTicker(window)
+		ticker := time.NewTicker(max(time.Second, window/time.Duration(len(rl.shards))))
 		defer ticker.Stop()
+		index := 0
 		for range ticker.C {
-			rl.gc()
+			rl.gcShard(index)
+			index = (index + 1) % len(rl.shards)
 		}
 	}()
 
