@@ -110,15 +110,18 @@ func TestLegacyReminderMigrationRearmsAlreadyNormalizedTasks(t *testing.T) {
 		migrated := false
 		for _, event := range mt.GetAllStartedEvents() {
 			if event.CommandName == "find" && event.Command.Lookup("find").StringValue() == "_migrations" {
-				if event.Command.Lookup("filter").Document().Lookup("_id").StringValue() != "course_auto_reminders_v2" {
+				if event.Command.Lookup("filter").Document().Lookup("_id").StringValue() != "course_auto_reminders_v3" {
 					mt.Fatal("v1 migration marker would suppress the three-stage upgrade")
 				}
 			}
 			if event.CommandName == "update" && event.Command.Lookup("update").StringValue() == mt.Coll.Name() {
 				writes, _ := event.Command.Lookup("updates").Array().Values()
 				set := writes[0].Document().Lookup("u").Document().Lookup("$set").Document()
-				if !set.Lookup("auto_reminder_pending").Boolean() || set.Lookup("auto_reminder_version").Int32() != 2 {
+				if !set.Lookup("auto_reminder_pending").Boolean() || set.Lookup("auto_reminder_version").Int32() != 3 {
 					mt.Fatal("legacy task did not re-enter reminder scheduling")
+				}
+				if set.Lookup("auto_reminder_at").DateTime() != time.Date(2026, 11, 30, 3, 59, 25, 0, time.UTC).UnixMilli() {
+					mt.Fatal("task preparation did not start thirty seconds before its early-send timestamp")
 				}
 				migrated = true
 			}

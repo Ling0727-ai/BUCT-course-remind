@@ -2,6 +2,7 @@ package CourseData
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/Ling0727-ai/go-buct-course-backend/internal/deadline"
@@ -17,7 +18,7 @@ func normalizeSchedule(task *CourseData) {
 	task.DeadlineAt, task.AutoReminderAt = nil, nil
 	task.AutoReminderPending = false
 	if at, err := deadline.Parse(task.Deadline); err == nil {
-		auto := at.Add(-24 * time.Hour)
+		auto := scheduling.AutoReminderPreparationTime(at)
 		task.DeadlineAt, task.AutoReminderAt = &at, &auto
 		task.AutoReminderPending = true
 	}
@@ -33,7 +34,8 @@ func (r *MongoCourseDataRepository) BackfillDeadlines() error {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 	marker := r.collection.Database().Collection("_migrations")
-	if err := marker.FindOne(ctx, bson.M{"_id": "course_auto_reminders_v2"}).Err(); err == nil {
+	migrationID := fmt.Sprintf("course_auto_reminders_v%d", scheduling.AutoReminderVersion)
+	if err := marker.FindOne(ctx, bson.M{"_id": migrationID}).Err(); err == nil {
 		return nil
 	} else if err != mongo.ErrNoDocuments {
 		return err
@@ -80,7 +82,7 @@ func (r *MongoCourseDataRepository) BackfillDeadlines() error {
 	if err := flush(); err != nil {
 		return err
 	}
-	_, err = marker.UpdateOne(ctx, bson.M{"_id": "course_auto_reminders_v2"}, bson.M{"$set": bson.M{"completed_at": time.Now()}}, options.Update().SetUpsert(true))
+	_, err = marker.UpdateOne(ctx, bson.M{"_id": migrationID}, bson.M{"$set": bson.M{"completed_at": time.Now()}}, options.Update().SetUpsert(true))
 	return err
 }
 

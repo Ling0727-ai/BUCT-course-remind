@@ -2,7 +2,17 @@ package scheduling
 
 import "time"
 
-const AutoReminderVersion = 2
+const AutoReminderVersion = 3
+const AutoReminderSendAhead = 5 * time.Second
+const AutoReminderPrepareAhead = 30 * time.Second
+
+func AutoReminderTime(deadline time.Time, hours int) time.Time {
+	return deadline.Add(-time.Duration(hours)*time.Hour - AutoReminderSendAhead)
+}
+
+func AutoReminderPreparationTime(deadline time.Time) time.Time {
+	return AutoReminderTime(deadline, 24).Add(-AutoReminderPrepareAhead)
+}
 
 type AutoReminderStage struct {
 	Hours int
@@ -18,10 +28,10 @@ func AutoReminderStages(deadline, now time.Time) []AutoReminderStage {
 	for i, hours := range offsets {
 		until := deadline
 		if i+1 < len(offsets) {
-			until = deadline.Add(-time.Duration(offsets[i+1]) * time.Hour)
+			until = AutoReminderTime(deadline, offsets[i+1])
 		}
 		if now.Before(until) {
-			stages = append(stages, AutoReminderStage{Hours: hours, At: deadline.Add(-time.Duration(hours) * time.Hour), Until: until})
+			stages = append(stages, AutoReminderStage{Hours: hours, At: AutoReminderTime(deadline, hours), Until: until})
 		}
 	}
 	return stages

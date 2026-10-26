@@ -9,11 +9,14 @@ import (
 func TestThreeReminderStagesUseExactDeadlineOffsets(t *testing.T) {
 	deadline := time.Date(2026, 10, 30, 18, 37, 42, 0, time.FixedZone("CST", 8*60*60))
 	stages := AutoReminderStages(deadline, deadline.Add(-25*time.Hour))
+	if !AutoReminderPreparationTime(deadline).Equal(deadline.Add(-24*time.Hour - 35*time.Second)) {
+		t.Fatal("reminder jobs are not prepared before their send timestamp")
+	}
 	if len(stages) != 3 {
 		t.Fatalf("got %d stages", len(stages))
 	}
 	for i, hours := range []int{24, 12, 1} {
-		if stages[i].Hours != hours || !stages[i].At.Equal(deadline.Add(-time.Duration(hours)*time.Hour)) || stages[i].At.Second() != 42 {
+		if stages[i].Hours != hours || !stages[i].At.Equal(deadline.Add(-time.Duration(hours)*time.Hour-5*time.Second)) || stages[i].At.Second() != 37 {
 			t.Fatalf("wrong timestamp for %dh stage: %v", hours, stages[i])
 		}
 	}
@@ -27,9 +30,13 @@ func TestLateDiscoveryAndRestartDoNotProduceReminderBursts(t *testing.T) {
 	}{
 		{25 * time.Hour, []int{24, 12, 1}},
 		{24 * time.Hour, []int{24, 12, 1}},
+		{12*time.Hour + 6*time.Second, []int{24, 12, 1}},
+		{12*time.Hour + 5*time.Second, []int{12, 1}},
 		{12 * time.Hour, []int{12, 1}},
 		{2 * time.Hour, []int{12, 1}},
 		{time.Hour, []int{1}},
+		{time.Hour + 6*time.Second, []int{12, 1}},
+		{time.Hour + 5*time.Second, []int{1}},
 		{30 * time.Minute, []int{1}},
 		{0, []int{}},
 		{-time.Second, []int{}},

@@ -51,7 +51,10 @@ func TestAutoRemindersBatchQueriesKeepUserStatesSeparate(t *testing.T) {
 						mt.Fatal("one user's completed status leaked into another user")
 					}
 					planned := set.Lookup("scheduled_time").DateTime()
-					if planned != now.Add(time.Duration(24-hours)*time.Hour).UnixMilli() {
+					if set.Lookup("send_ahead_seconds").Int32() != 5 {
+						mt.Fatal("new reminders were not marked as already advanced")
+					}
+					if planned != now.Add(time.Duration(24-hours)*time.Hour-5*time.Second).UnixMilli() {
 						mt.Fatal("stage did not use its exact planned timestamp")
 					}
 				}

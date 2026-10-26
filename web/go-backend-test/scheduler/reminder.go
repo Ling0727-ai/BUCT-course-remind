@@ -17,6 +17,7 @@ import (
 	"github.com/Ling0727-ai/go-buct-course-backend/models"
 	"github.com/Ling0727-ai/go-buct-course-backend/models/AssignmentStatus"
 	"github.com/Ling0727-ai/go-buct-course-backend/models/CourseData"
+	"github.com/Ling0727-ai/go-buct-course-backend/models/Reminder"
 	"github.com/Ling0727-ai/go-buct-course-backend/models/Todo"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
@@ -207,6 +208,9 @@ func checkAndCreateAutoReminders() error {
 		if err := CourseData.Repository.BackfillDeadlines(); err != nil {
 			return err
 		}
+		if err := Reminder.Repository.BackfillSendAhead(); err != nil {
+			return err
+		}
 		deadlineMigrationReady.Store(true)
 	}
 	return createAutoReminders(client.Database("buct-course"), time.Now())
@@ -344,11 +348,11 @@ func createAutoReminders(db *mongo.Database, now time.Time) error {
 			if retryID := retries[key]; retryID != nil {
 				reminders = append(reminders, mongo.NewUpdateOneModel().SetFilter(bson.M{"_id": retryID, "status": bson.M{"$in": bson.A{"failed", "cancelled"}}}).
 					SetUpdate(bson.M{"$set": bson.M{"status": "scheduled", "scheduled_time": stage.At, "updated_at": now, "email": emails[task.UserID],
-						"offset_hours": stage.Hours, "deadline_at": *task.DeadlineAt, "message": buildAutoReminderMessage(task, *task.DeadlineAt, stage.At, stage.Hours)}, "$unset": bson.M{"error": "", "cancel_reason": ""}}))
+						"offset_hours": stage.Hours, "deadline_at": *task.DeadlineAt, "send_ahead_seconds": int(scheduling.AutoReminderSendAhead / time.Second), "message": buildAutoReminderMessage(task, *task.DeadlineAt, stage.At, stage.Hours)}, "$unset": bson.M{"error": "", "cancel_reason": ""}}))
 			} else {
 				reminders = append(reminders, mongo.NewUpdateOneModel().SetFilter(bson.M{"_id": autoReminderID(task.UserID, task.TaskID, stage.Hours)}).
 					SetUpdate(bson.M{"$setOnInsert": bson.M{"user_id": task.UserID, "target_id": task.TaskID, "type": "assignment", "auto_created": true,
-						"offset_hours": stage.Hours, "deadline_at": *task.DeadlineAt, "email": emails[task.UserID], "message": buildAutoReminderMessage(task, *task.DeadlineAt, stage.At, stage.Hours), "status": "scheduled",
+						"offset_hours": stage.Hours, "deadline_at": *task.DeadlineAt, "send_ahead_seconds": int(scheduling.AutoReminderSendAhead / time.Second), "email": emails[task.UserID], "message": buildAutoReminderMessage(task, *task.DeadlineAt, stage.At, stage.Hours), "status": "scheduled",
 						"scheduled_time": stage.At, "created_at": now, "updated_at": now}}).SetUpsert(true))
 			}
 		}
