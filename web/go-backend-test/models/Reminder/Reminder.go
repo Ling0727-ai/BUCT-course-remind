@@ -37,6 +37,8 @@ type Reminder struct {
 	ScheduledTime time.Time    `bson:"scheduled_time"       json:"scheduled_time"` // 计划发送时间
 	Status        Status       `bson:"status"               json:"status"`
 	AutoCreated   bool         `bson:"auto_created"         json:"auto_created"` // true=调度器自动创建
+	OffsetHours   int          `bson:"offset_hours,omitempty" json:"offset_hours,omitempty"`
+	DeadlineAt    *time.Time   `bson:"deadline_at,omitempty" json:"deadline_at,omitempty"`
 	CancelReason  string       `bson:"cancel_reason,omitempty" json:"cancel_reason,omitempty"`
 	Error         string       `bson:"error,omitempty"      json:"error,omitempty"`
 	SentAt        *time.Time   `bson:"sent_at,omitempty"    json:"sent_at,omitempty"`
@@ -77,4 +79,5 @@ var Repository = &MongoReminderRepository{}
 // Init 在服务启动时绑定 MongoDB collection，必须在接收任何请求前调用
 func Init(db *mongo.Database) {
 	Repository.collection = db.Collection("scheduled_reminders")
+	ensureIndexes(Repository.collection)
 }

@@ -217,9 +217,9 @@ func (r *MongoCourseDataRepository) SaveUserCourseData(userID string, tasks []Ta
 		normalizeSchedule(doc)
 		set := bson.M{"subject": doc.Subject, "title": doc.Title, "deadline": doc.Deadline,
 			"details": doc.Details, "url": doc.Url, "type": doc.Type, "updated_at": now,
-			"deadline_at": doc.DeadlineAt, "deadline_normalized": true}
+			"deadline_at": doc.DeadlineAt, "deadline_normalized": true, "auto_reminder_version": scheduling.AutoReminderVersion}
 		// Preserve reminder state when only an unrelated field (e.g. URL) changes.
-		if prior := old[taskID]; prior == nil || !prior.DeadlineNormalized || prior.Deadline != doc.Deadline {
+		if prior := old[taskID]; prior == nil || !prior.DeadlineNormalized || prior.Deadline != doc.Deadline || prior.AutoReminderVersion < scheduling.AutoReminderVersion {
 			set["auto_reminder_at"], set["auto_reminder_pending"] = doc.AutoReminderAt, doc.AutoReminderPending
 		}
 		writes = append(writes, mongo.NewUpdateOneModel().SetFilter(bson.M{"user_id": userID, "task_id": taskID}).

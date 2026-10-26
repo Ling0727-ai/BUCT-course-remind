@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/Ling0727-ai/go-buct-course-backend/internal/deadline"
+	"github.com/Ling0727-ai/go-buct-course-backend/internal/scheduling"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
@@ -12,6 +13,7 @@ import (
 
 func normalizeSchedule(task *CourseData) {
 	task.DeadlineNormalized = true
+	task.AutoReminderVersion = scheduling.AutoReminderVersion
 	task.DeadlineAt, task.AutoReminderAt = nil, nil
 	task.AutoReminderPending = false
 	if at, err := deadline.Parse(task.Deadline); err == nil {
@@ -23,7 +25,7 @@ func normalizeSchedule(task *CourseData) {
 
 func sameContent(a, b *CourseData) bool {
 	return a.Subject == b.Subject && a.Title == b.Title && a.Deadline == b.Deadline &&
-		a.Details == b.Details && a.Url == b.Url && a.Type == b.Type && a.DeadlineNormalized
+		a.Details == b.Details && a.Url == b.Url && a.Type == b.Type && a.DeadlineNormalized && a.AutoReminderVersion >= scheduling.AutoReminderVersion
 }
 
 // BackfillDeadlines visits legacy records once, without loading all tasks into memory.
@@ -31,12 +33,13 @@ func (r *MongoCourseDataRepository) BackfillDeadlines() error {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 	marker := r.collection.Database().Collection("_migrations")
-	if err := marker.FindOne(ctx, bson.M{"_id": "course_deadline_v1"}).Err(); err == nil {
+	if err := marker.FindOne(ctx, bson.M{"_id": "course_auto_reminders_v2"}).Err(); err == nil {
 		return nil
 	} else if err != mongo.ErrNoDocuments {
 		return err
 	}
-	cursor, err := r.collection.Find(ctx, bson.M{"deadline_normalized": bson.M{"$ne": true}},
+	needsUpgrade := bson.M{"$or": bson.A{bson.M{"deadline_normalized": bson.M{"$ne": true}}, bson.M{"auto_reminder_version": bson.M{"$lt": scheduling.AutoReminderVersion}}, bson.M{"auto_reminder_version": bson.M{"$exists": false}}}}
+	cursor, err := r.collection.Find(ctx, needsUpgrade,
 		options.Find().SetProjection(bson.M{"deadline": 1}).SetBatchSize(128))
 	if err != nil {
 		return err
@@ -61,9 +64,10 @@ func (r *MongoCourseDataRepository) BackfillDeadlines() error {
 		}
 		task := &CourseData{Deadline: doc.Deadline}
 		normalizeSchedule(task)
-		batch = append(batch, mongo.NewUpdateOneModel().SetFilter(bson.M{"_id": doc.ID, "deadline": doc.Deadline, "deadline_normalized": bson.M{"$ne": true}}).
+		filter := bson.M{"_id": doc.ID, "deadline": doc.Deadline, "$and": bson.A{needsUpgrade}}
+		batch = append(batch, mongo.NewUpdateOneModel().SetFilter(filter).
 			SetUpdate(bson.M{"$set": bson.M{"deadline_normalized": true, "deadline_at": task.DeadlineAt,
-				"auto_reminder_at": task.AutoReminderAt, "auto_reminder_pending": task.AutoReminderPending}}))
+				"auto_reminder_at": task.AutoReminderAt, "auto_reminder_pending": task.AutoReminderPending, "auto_reminder_version": scheduling.AutoReminderVersion}}))
 		if len(batch) == 128 {
 			if err := flush(); err != nil {
 				return err
@@ -76,7 +80,7 @@ func (r *MongoCourseDataRepository) BackfillDeadlines() error {
 	if err := flush(); err != nil {
 		return err
 	}
-	_, err = marker.UpdateOne(ctx, bson.M{"_id": "course_deadline_v1"}, bson.M{"$set": bson.M{"completed_at": time.Now()}}, options.Update().SetUpsert(true))
+	_, err = marker.UpdateOne(ctx, bson.M{"_id": "course_auto_reminders_v2"}, bson.M{"$set": bson.M{"completed_at": time.Now()}}, options.Update().SetUpsert(true))
 	return err
 }
 

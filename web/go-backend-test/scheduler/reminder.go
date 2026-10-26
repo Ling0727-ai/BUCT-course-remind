@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"math"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -77,15 +78,17 @@ func deliverReminder(col *mongo.Collection, reminder ScheduledReminder) error {
 	status, reason := "sent", ""
 	if reminder.Email == "" || reminder.Message == "" {
 		status, reason = "failed", "missing email or message"
-	} else if skip, why, checkErr := reminderSkipState(reminder); checkErr != nil {
-		// Read failure must not lead to an unwanted email; release the claim for retry.
-		status, reason = "scheduled", checkErr.Error()
-	} else if skip {
-		status, reason = "cancelled", why
-	} else if config.Mail == nil {
-		status, reason = "failed", "mail is not configured"
-	} else if err := config.Mail.SendMail(reminder.Email, "北化课程提醒", reminder.Message); err != nil {
-		status, reason = "failed", err.Error()
+	} else {
+		message, why, checkErr := reminderDeliveryContent(reminder, time.Now())
+		if checkErr != nil {
+			status, reason = "scheduled", checkErr.Error()
+		} else if why != "" {
+			status, reason = "cancelled", why
+		} else if config.Mail == nil {
+			status, reason = "failed", "mail is not configured"
+		} else if err := config.Mail.SendMail(reminder.Email, "北化课程提醒", message); err != nil {
+			status, reason = "failed", err.Error()
+		}
 	}
 	set := bson.M{"status": status, "updated_at": time.Now()}
 	if status == "sent" {
@@ -104,12 +107,46 @@ func deliverReminder(col *mongo.Collection, reminder ScheduledReminder) error {
 	writeCtx, writeCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer writeCancel()
 	_, err = col.UpdateOne(writeCtx, bson.M{"_id": reminder.ID, "status": "processing"}, bson.M{"$set": set})
-	if err == nil && reminder.AutoCreated && (status == "failed" || status == "cancelled") {
+	if err == nil && reminder.AutoCreated && status == "failed" {
 		_, err = col.Database().Collection("course_data").UpdateOne(writeCtx,
 			bson.M{"user_id": reminder.UserID, "task_id": reminder.TargetID, "deadline_at": bson.M{"$gt": time.Now()}},
-			bson.M{"$set": bson.M{"auto_reminder_pending": true, "auto_reminder_at": time.Now().Add(time.Hour)}})
+			bson.M{"$set": bson.M{"auto_reminder_pending": true, "auto_reminder_at": time.Now().Add(time.Minute)}})
 	}
 	return err
+}
+
+func reminderDeliveryContent(r ScheduledReminder, now time.Time) (string, string, error) {
+	if r.AutoCreated && r.DeadlineAt != nil && scheduling.AutoReminderStageExpired(r.OffsetHours, *r.DeadlineAt, now) {
+		return "", "auto reminder stage superseded or deadline passed", nil
+	}
+	if skip, why, err := reminderSkipState(r); err != nil || skip {
+		return "", why, err
+	}
+	if !r.AutoCreated || r.Type != "assignment" {
+		return r.Message, "", nil
+	}
+	task, err := CourseData.Repository.GetByTaskID(r.UserID, r.TargetID)
+	if errors.Is(err, mongo.ErrNoDocuments) {
+		return "", "task removed upstream", nil
+	}
+	if err != nil {
+		return "", "", err
+	}
+	at := task.DeadlineAt
+	if at == nil {
+		parsed, err := deadline.Parse(task.Deadline)
+		if err != nil {
+			return "", "task deadline unavailable", nil
+		}
+		at = &parsed
+	}
+	if r.DeadlineAt != nil && !r.DeadlineAt.Equal(*at) {
+		return "", "task deadline changed", nil
+	}
+	if scheduling.AutoReminderStageExpired(r.OffsetHours, *at, now) {
+		return "", "auto reminder stage superseded or deadline passed", nil
+	}
+	return buildAutoReminderMessage(task, *at, now, r.OffsetHours), "", nil
 }
 
 func reminderSkipState(r ScheduledReminder) (bool, string, error) {
@@ -142,8 +179,20 @@ func reminderSkipState(r ScheduledReminder) (bool, string, error) {
 	return false, "", nil
 }
 
-func autoReminderID(userID, taskID string) string {
-	return fmt.Sprintf("auto_%x", sha256.Sum256([]byte(userID+"\x00"+taskID)))
+func autoReminderID(userID, taskID string, hours int) string {
+	key := userID + "\x00" + taskID
+	// Keep the original 24-hour ID so already-created reminders remain idempotent.
+	if hours != 0 && hours != 24 {
+		key += fmt.Sprintf("\x00%dh", hours)
+	}
+	return fmt.Sprintf("auto_%x", sha256.Sum256([]byte(key)))
+}
+
+func autoReminderKey(userID, taskID string, hours int) string {
+	if hours == 0 {
+		hours = 24
+	}
+	return fmt.Sprintf("%s\x00%s\x00%d", userID, taskID, hours)
 }
 
 // Query a bounded set of due tasks, then fetch users, states and legacy reminders in batches.
@@ -247,7 +296,7 @@ func createAutoReminders(db *mongo.Database, now time.Time) error {
 	states.Close(ctx)
 	remCol := db.Collection(RemindersCollection)
 	existing, err := remCol.Find(ctx, bson.M{"$or": reminderFilters, "auto_created": true, "type": "assignment"},
-		options.Find().SetProjection(bson.M{"user_id": 1, "target_id": 1, "status": 1}))
+		options.Find().SetProjection(bson.M{"user_id": 1, "target_id": 1, "status": 1, "offset_hours": 1}))
 	if err != nil {
 		return err
 	}
@@ -259,12 +308,13 @@ func createAutoReminders(db *mongo.Database, now time.Time) error {
 			UserID string      `bson:"user_id"`
 			Target string      `bson:"target_id"`
 			Status string      `bson:"status"`
+			Hours  int         `bson:"offset_hours"`
 		}
 		if err := existing.Decode(&r); err != nil {
 			existing.Close(ctx)
 			return err
 		}
-		key := r.UserID + "\x00" + r.Target
+		key := autoReminderKey(r.UserID, r.Target, r.Hours)
 		if r.Status == "scheduled" || r.Status == "sent" || r.Status == "processing" {
 			known[key] = true
 		} else {
@@ -278,23 +328,33 @@ func createAutoReminders(db *mongo.Database, now time.Time) error {
 	existing.Close(ctx)
 	reminders, updates := make([]mongo.WriteModel, 0), make([]mongo.WriteModel, 0, len(tasks))
 	for _, task := range tasks {
-		key := task.UserID + "\x00" + task.TaskID
-		pending := !known[key] && (emails[task.UserID] == "" || blocked[key])
-		set := bson.M{"auto_reminder_pending": pending}
-		if pending {
-			set["auto_reminder_at"] = now.Add(time.Hour)
+		pending := false
+		if task.DeadlineAt == nil {
+			continue
 		}
-		if !pending && !known[key] {
+		for _, stage := range scheduling.AutoReminderStages(*task.DeadlineAt, now) {
+			key := autoReminderKey(task.UserID, task.TaskID, stage.Hours)
+			if known[key] {
+				continue
+			}
+			if emails[task.UserID] == "" || blocked[task.UserID+"\x00"+task.TaskID] {
+				pending = true
+				continue
+			}
 			if retryID := retries[key]; retryID != nil {
 				reminders = append(reminders, mongo.NewUpdateOneModel().SetFilter(bson.M{"_id": retryID, "status": bson.M{"$in": bson.A{"failed", "cancelled"}}}).
-					SetUpdate(bson.M{"$set": bson.M{"status": "scheduled", "scheduled_time": now, "updated_at": now, "email": emails[task.UserID],
-						"message": buildReminderMessage(task, *task.DeadlineAt, now)}, "$unset": bson.M{"error": "", "cancel_reason": ""}}))
+					SetUpdate(bson.M{"$set": bson.M{"status": "scheduled", "scheduled_time": stage.At, "updated_at": now, "email": emails[task.UserID],
+						"offset_hours": stage.Hours, "deadline_at": *task.DeadlineAt, "message": buildAutoReminderMessage(task, *task.DeadlineAt, stage.At, stage.Hours)}, "$unset": bson.M{"error": "", "cancel_reason": ""}}))
 			} else {
-				reminders = append(reminders, mongo.NewUpdateOneModel().SetFilter(bson.M{"_id": autoReminderID(task.UserID, task.TaskID)}).
+				reminders = append(reminders, mongo.NewUpdateOneModel().SetFilter(bson.M{"_id": autoReminderID(task.UserID, task.TaskID, stage.Hours)}).
 					SetUpdate(bson.M{"$setOnInsert": bson.M{"user_id": task.UserID, "target_id": task.TaskID, "type": "assignment", "auto_created": true,
-						"email": emails[task.UserID], "message": buildReminderMessage(task, *task.DeadlineAt, now), "status": "scheduled",
-						"scheduled_time": now, "created_at": now, "updated_at": now}}).SetUpsert(true))
+						"offset_hours": stage.Hours, "deadline_at": *task.DeadlineAt, "email": emails[task.UserID], "message": buildAutoReminderMessage(task, *task.DeadlineAt, stage.At, stage.Hours), "status": "scheduled",
+						"scheduled_time": stage.At, "created_at": now, "updated_at": now}}).SetUpsert(true))
 			}
+		}
+		set := bson.M{"auto_reminder_pending": pending, "auto_reminder_version": scheduling.AutoReminderVersion}
+		if pending {
+			set["auto_reminder_at"] = now.Add(time.Hour)
 		}
 		updates = append(updates, mongo.NewUpdateOneModel().SetFilter(bson.M{"_id": task.ID, "deadline": task.Deadline}).SetUpdate(bson.M{"$set": set}))
 	}
@@ -312,17 +372,23 @@ func createAutoReminders(db *mongo.Database, now time.Time) error {
 	return nil
 }
 
+func buildAutoReminderMessage(task *CourseData.CourseData, at, now time.Time, hours int) string {
+	if hours == 0 {
+		hours = 24
+	}
+	return fmt.Sprintf("提醒节点：截止前 %d 小时\n\n%s", hours, buildReminderMessage(task, at, now))
+}
+
 func buildReminderMessage(task *CourseData.CourseData, at, now time.Time) string {
 	kind := "作业"
 	if task.Type == "test" {
 		kind = "测试"
 	}
-	hours := int(at.Sub(now).Hours())
-	left := "不到1小时"
+	seconds := max(0, int(math.Ceil(at.Sub(now).Seconds())))
+	hours := seconds / 3600
+	left := fmt.Sprintf("%d小时%02d分%02d秒", hours, seconds/60%60, seconds%60)
 	if hours >= 24 {
-		left = fmt.Sprintf("约%d天%d小时", hours/24, hours%24)
-	} else if hours >= 1 {
-		left = fmt.Sprintf("约%d小时", hours)
+		left = fmt.Sprintf("%d天%d小时%02d分%02d秒", hours/24, hours%24, seconds/60%60, seconds%60)
 	}
 	return fmt.Sprintf("⏰ 自动提醒：%s即将截止\n\n科目: %s\n标题: %s\n截止时间: %s\n剩余时间: %s\n\n请及时完成！", kind, task.Subject, task.Title, at.In(deadline.Campus).Format("2006年01月02日 15:04:05"), left)
 }

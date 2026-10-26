@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/Ling0727-ai/go-buct-course-backend/config"
+	"github.com/Ling0727-ai/go-buct-course-backend/internal/scheduling"
 	"github.com/Ling0727-ai/go-buct-course-backend/internal/usercache"
 	"github.com/Ling0727-ai/go-buct-course-backend/models"
 	"go.mongodb.org/mongo-driver/bson"
@@ -71,6 +72,14 @@ func (r *MongoAssignmentStatusRepository) UpdateStatus(
 			"user_id":       userID,
 			"assignment_id": assignmentID,
 		})
+		if err == nil {
+			_, err = r.collection.Database().Collection("course_data").UpdateOne(ctx,
+				bson.M{"user_id": userID, "task_id": assignmentID, "deadline_at": bson.M{"$gt": time.Now()}},
+				bson.M{"$set": bson.M{"auto_reminder_pending": true, "auto_reminder_at": time.Now()}})
+			if err == nil {
+				scheduling.NotifyReminders()
+			}
+		}
 		return err
 	}
 

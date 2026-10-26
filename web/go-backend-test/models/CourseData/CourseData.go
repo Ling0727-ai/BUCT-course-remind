@@ -24,6 +24,7 @@ type CourseData struct {
 	AutoReminderAt      *time.Time `bson:"auto_reminder_at,omitempty" json:"-"`
 	AutoReminderPending bool       `bson:"auto_reminder_pending" json:"-"`
 	DeadlineNormalized  bool       `bson:"deadline_normalized" json:"-"`
+	AutoReminderVersion int        `bson:"auto_reminder_version" json:"-"`
 }
 
 // TaskInput 用于批量保存时的输入格式

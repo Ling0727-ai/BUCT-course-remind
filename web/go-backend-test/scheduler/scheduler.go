@@ -33,6 +33,8 @@ type ScheduledReminder struct {
 	ScheduledTime time.Time   `bson:"scheduled_time"`
 	Status        string      `bson:"status"` // "scheduled" | "processing" | "sent" | "failed" | "cancelled"
 	AutoCreated   bool        `bson:"auto_created"`
+	OffsetHours   int         `bson:"offset_hours"`
+	DeadlineAt    *time.Time  `bson:"deadline_at,omitempty"`
 	CancelReason  string      `bson:"cancel_reason,omitempty"`
 	Error         string      `bson:"error,omitempty"`
 	SentAt        *time.Time  `bson:"sent_at,omitempty"`

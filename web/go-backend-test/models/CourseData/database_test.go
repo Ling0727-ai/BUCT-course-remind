@@ -92,3 +92,39 @@ func TestEmptySuccessfulRefreshAdvancesFreshness(t *testing.T) {
 		}
 	})
 }
+
+func TestLegacyReminderMigrationRearmsAlreadyNormalizedTasks(t *testing.T) {
+	mt := mtest.New(t, mtest.NewOptions().ClientType(mtest.Mock))
+	mt.Run("v1 to three stages", func(mt *mtest.T) {
+		ns := mt.DB.Name() + "."
+		mt.AddMockResponses(
+			mtest.CreateCursorResponse(0, ns+"_migrations", mtest.FirstBatch),
+			mtest.CreateCursorResponse(0, ns+mt.Coll.Name(), mtest.FirstBatch, bson.D{{Key: "_id", Value: "legacy-task"}, {Key: "deadline", Value: "2026-12-01 12:00:00"}}),
+			mtest.CreateSuccessResponse(bson.E{Key: "n", Value: 1}),
+			mtest.CreateSuccessResponse(bson.E{Key: "n", Value: 1}),
+		)
+		repo := &MongoCourseDataRepository{collection: mt.Coll}
+		if err := repo.BackfillDeadlines(); err != nil {
+			mt.Fatal(err)
+		}
+		migrated := false
+		for _, event := range mt.GetAllStartedEvents() {
+			if event.CommandName == "find" && event.Command.Lookup("find").StringValue() == "_migrations" {
+				if event.Command.Lookup("filter").Document().Lookup("_id").StringValue() != "course_auto_reminders_v2" {
+					mt.Fatal("v1 migration marker would suppress the three-stage upgrade")
+				}
+			}
+			if event.CommandName == "update" && event.Command.Lookup("update").StringValue() == mt.Coll.Name() {
+				writes, _ := event.Command.Lookup("updates").Array().Values()
+				set := writes[0].Document().Lookup("u").Document().Lookup("$set").Document()
+				if !set.Lookup("auto_reminder_pending").Boolean() || set.Lookup("auto_reminder_version").Int32() != 2 {
+					mt.Fatal("legacy task did not re-enter reminder scheduling")
+				}
+				migrated = true
+			}
+		}
+		if !migrated {
+			mt.Fatal("legacy task was not migrated")
+		}
+	})
+}

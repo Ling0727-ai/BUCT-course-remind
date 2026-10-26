@@ -3,6 +3,7 @@ package Reminder
 import (
 	"context"
 	"fmt"
+	"log"
 	"time"
 
 	"github.com/Ling0727-ai/go-buct-course-backend/internal/scheduling"
@@ -22,28 +23,34 @@ func NewMongoReminderRepository() *MongoReminderRepository {
 		panic(err)
 	}
 	col := client.Database("buct-course").Collection(collectionName)
+	ensureIndexes(col)
+	return &MongoReminderRepository{collection: col}
+}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+func ensureIndexes(col *mongo.Collection) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
 
 	// (user_id, target_id, auto_created) 复合索引，用于去重查询
-	col.Indexes().CreateOne(ctx, mongo.IndexModel{
+	if _, err := col.Indexes().CreateOne(ctx, mongo.IndexModel{
 		Keys: bson.D{
 			{Key: "user_id", Value: 1},
 			{Key: "target_id", Value: 1},
 			{Key: "auto_created", Value: 1},
 			{Key: "status", Value: 1},
 		},
-	})
+	}); err != nil {
+		log.Printf("[reminder] 创建去重查询索引失败: %v", err)
+	}
 	// status + scheduled_time，供调度器查询到期提醒
-	col.Indexes().CreateOne(ctx, mongo.IndexModel{
+	if _, err := col.Indexes().CreateOne(ctx, mongo.IndexModel{
 		Keys: bson.D{
 			{Key: "status", Value: 1},
 			{Key: "scheduled_time", Value: 1},
 		},
-	})
-
-	return &MongoReminderRepository{collection: col}
+	}); err != nil {
+		log.Printf("[reminder] 创建到期时间索引失败: %v", err)
+	}
 }
 
 // Create 创建新提醒
