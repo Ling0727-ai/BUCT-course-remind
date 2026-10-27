@@ -1,8 +1,10 @@
 package AssignmentStatus
 
 import (
+	"context"
 	"time"
 
+	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
 )
 
@@ -44,7 +46,7 @@ type AssignmentStatusRepository interface {
 	// status 为 "active" 时删除记录（恢复到默认状态）
 	UpdateStatus(userID, assignmentID, title, subject, assignmentType, status string, autoExpireHours *int) error
 
-	// MarkCompleted 标记已完成（12h 后 TTL 自动删除）
+	// MarkCompleted 标记已完成，直到作业消失或用户撤销
 	MarkCompleted(userID, assignmentID, title, subject string) error
 	// MarkDeleted 软删除（待办类型 12h 后 TTL 自动删除）
 	MarkDeleted(userID, assignmentID, title, subject, assignmentType string) error
@@ -87,6 +89,12 @@ type MongoAssignmentStatusRepository struct {
 var Repository = &MongoAssignmentStatusRepository{}
 
 // Init 在服务启动时绑定 MongoDB collection，必须在接收任何请求前调用
-func Init(db *mongo.Database) {
+func Init(db *mongo.Database) error {
 	Repository.collection = db.Collection("assignment_status")
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	_, err := Repository.collection.UpdateMany(ctx,
+		bson.M{"status": StatusCompleted, "expires_at": bson.M{"$exists": true}},
+		bson.M{"$unset": bson.M{"expires_at": ""}})
+	return err
 }

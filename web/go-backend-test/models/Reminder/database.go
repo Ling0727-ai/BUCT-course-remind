@@ -51,6 +51,11 @@ func ensureIndexes(col *mongo.Collection) {
 	}); err != nil {
 		log.Printf("[reminder] 创建到期时间索引失败: %v", err)
 	}
+	if _, err := col.Indexes().CreateOne(ctx, mongo.IndexModel{
+		Keys: bson.D{{Key: "status", Value: 1}, {Key: "processing_until", Value: 1}},
+	}); err != nil {
+		log.Printf("[reminder] 创建处理超时索引失败: %v", err)
+	}
 }
 
 // Create 创建新提醒

@@ -25,6 +25,8 @@ import (
 	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
+const reminderProcessingLease = 2 * time.Minute
+
 // Delivery concurrency is bounded independently of scraping.
 func processDueReminders() error {
 	client, err := models.ConnectToDB()
@@ -34,6 +36,9 @@ func processDueReminders() error {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	col := client.Database("buct-course").Collection(RemindersCollection)
+	if err := recoverStaleReminders(ctx, col, time.Now()); err != nil {
+		return err
+	}
 	cursor, err := col.Find(ctx, bson.M{"status": "scheduled", "scheduled_time": bson.M{"$lte": time.Now()}},
 		options.Find().SetSort(bson.D{{Key: "scheduled_time", Value: 1}}).SetLimit(50))
 	if err != nil {
@@ -65,11 +70,26 @@ func processDueReminders() error {
 	return nil
 }
 
+func recoverStaleReminders(ctx context.Context, col *mongo.Collection, now time.Time) error {
+	result, err := col.UpdateMany(ctx, bson.M{"status": "processing", "$or": bson.A{
+		bson.M{"processing_until": bson.M{"$lte": now}},
+		bson.M{"processing_until": bson.M{"$exists": false}, "updated_at": bson.M{"$lte": now.Add(-reminderProcessingLease)}},
+	}}, bson.M{"$set": bson.M{"status": "scheduled", "updated_at": now},
+		"$unset": bson.M{"processing_until": "", "claim_token": ""}})
+	if err == nil && result.ModifiedCount > 0 {
+		log.Printf("[reminder] 恢复 %d 条超时的发送任务", result.ModifiedCount)
+	}
+	return err
+}
+
 func deliverReminder(col *mongo.Collection, reminder ScheduledReminder) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	claim, err := col.UpdateOne(ctx, bson.M{"_id": reminder.ID, "status": "scheduled"},
-		bson.M{"$set": bson.M{"status": "processing", "updated_at": time.Now()}})
+	now := time.Now()
+	claimToken := primitive.NewObjectID().Hex()
+	claim, err := col.UpdateOne(ctx, bson.M{"_id": reminder.ID, "status": "scheduled", "scheduled_time": bson.M{"$lte": now}},
+		bson.M{"$set": bson.M{"status": "processing", "updated_at": now,
+			"processing_until": now.Add(reminderProcessingLease), "claim_token": claimToken}})
 	if err != nil {
 		return err
 	}
@@ -107,8 +127,15 @@ func deliverReminder(col *mongo.Collection, reminder ScheduledReminder) error {
 	// SMTP may have outlived its batch context; persist the outcome with a fresh one.
 	writeCtx, writeCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer writeCancel()
-	_, err = col.UpdateOne(writeCtx, bson.M{"_id": reminder.ID, "status": "processing"}, bson.M{"$set": set})
-	if err == nil && reminder.AutoCreated && status == "failed" {
+	result, err := col.UpdateOne(writeCtx, bson.M{"_id": reminder.ID, "status": "processing", "claim_token": claimToken},
+		bson.M{"$set": set, "$unset": bson.M{"processing_until": "", "claim_token": ""}})
+	if err != nil {
+		return err
+	}
+	if result.MatchedCount == 0 {
+		return fmt.Errorf("提醒 %v 的处理租约已失效", reminder.ID)
+	}
+	if reminder.AutoCreated && status == "failed" {
 		_, err = col.Database().Collection("course_data").UpdateOne(writeCtx,
 			bson.M{"user_id": reminder.UserID, "task_id": reminder.TargetID, "deadline_at": bson.M{"$gt": time.Now()}},
 			bson.M{"$set": bson.M{"auto_reminder_pending": true, "auto_reminder_at": time.Now().Add(time.Minute)}})
@@ -288,7 +315,7 @@ func createAutoReminders(db *mongo.Database, now time.Time) error {
 			states.Close(ctx)
 			return err
 		}
-		if row.Expires != nil && !row.Expires.After(now) {
+		if row.Status != AssignmentStatus.StatusCompleted && row.Expires != nil && !row.Expires.After(now) {
 			continue
 		}
 		blocked[row.UserID+"\x00"+row.Target] = row.Status == "completed" || row.Status == "deleted" || row.Status == "permanent_deleted"
@@ -341,7 +368,10 @@ func createAutoReminders(db *mongo.Database, now time.Time) error {
 			if known[key] {
 				continue
 			}
-			if emails[task.UserID] == "" || blocked[task.UserID+"\x00"+task.TaskID] {
+			if blocked[task.UserID+"\x00"+task.TaskID] {
+				continue
+			}
+			if emails[task.UserID] == "" {
 				pending = true
 				continue
 			}

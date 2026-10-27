@@ -98,7 +98,7 @@ var Defaults = struct {
 		RestoreSuccess       string
 		PermDeleteSuccess    string
 		ClearSuccess         string
-		AutoDeleteHint       string
+		RetentionHint        string
 		CreateSuccess        string
 		UpdateSuccess        string
 		NotFound             string
@@ -334,7 +334,7 @@ var Defaults = struct {
 		RestoreSuccess       string
 		PermDeleteSuccess    string
 		ClearSuccess         string
-		AutoDeleteHint       string
+		RetentionHint        string
 		CreateSuccess        string
 		UpdateSuccess        string
 		NotFound             string
@@ -355,7 +355,7 @@ var Defaults = struct {
 		RestoreSuccess:       "待办事项已恢复",
 		PermDeleteSuccess:    "待办事项已永久删除",
 		ClearSuccess:         "已清空回收站",
-		AutoDeleteHint:       "，12小时后自动删除",
+		RetentionHint:        "，将保留直到删除",
 		CreateSuccess:        "待办事项创建成功",
 		UpdateSuccess:        "待办事项更新成功",
 		NotFound:             "待办事项不存在",

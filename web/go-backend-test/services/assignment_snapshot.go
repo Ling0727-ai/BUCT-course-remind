@@ -36,6 +36,9 @@ func GetAssignmentSnapshot(ctx context.Context, userID string) (*AssignmentSnaps
 		for _, status := range statuses {
 			expired := false
 			for _, expiry := range []*time.Time{status.ExpiresAt, status.TodoExpiresAt} {
+				if status.Status == AssignmentStatus.StatusCompleted {
+					continue
+				}
 				if expiry != nil {
 					left := expiry.Sub(now)
 					if left <= 0 {

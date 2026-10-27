@@ -64,9 +64,13 @@ func Start(cfg *config.Config) {
 	db := client.Database("buct-course")
 	User.Init(db)
 	CourseData.Init(db)
-	AssignmentStatus.Init(db)
+	if err := AssignmentStatus.Init(db); err != nil {
+		log.Fatalf("[app] 迁移已完成作业状态失败: %v", err)
+	}
 	Blacklist.Init(db)
-	Todo.Init(db)
+	if err := Todo.Init(db); err != nil {
+		log.Fatalf("[app] 迁移已完成待办失败: %v", err)
+	}
 	Reminder.Init(db)
 	log.Println("[app] 所有 Repository 已初始化")
 

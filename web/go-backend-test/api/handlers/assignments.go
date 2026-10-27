@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"errors"
 	"fmt"
 	"regexp"
 	"time"
@@ -13,6 +14,7 @@ import (
 	"github.com/Ling0727-ai/go-buct-course-backend/services"
 	"github.com/Ling0727-ai/go-buct-course-backend/utils"
 	"github.com/gin-gonic/gin"
+	"go.mongodb.org/mongo-driver/mongo"
 )
 
 // reCourseID 从课程 URL 提取 courseId 参数
@@ -259,14 +261,16 @@ func MarkAssignmentComplete(c *gin.Context) {
 		return
 	}
 	assignmentID := c.Param("id")
-
-	var body struct {
-		Title   string `json:"title"`
-		Subject string `json:"subject"`
+	task, err := CourseData.Repository.GetByTaskID(userID, assignmentID)
+	if errors.Is(err, mongo.ErrNoDocuments) {
+		c.JSON(utils.Defaults.Status.NotFound, gin.H{"success": false, "error": utils.Defaults.Assignment.NotFound})
+		return
 	}
-	c.ShouldBindJSON(&body)
-
-	if err := AssignmentStatus.Repository.MarkCompleted(userID, assignmentID, body.Title, body.Subject); err != nil {
+	if err != nil {
+		c.JSON(utils.Defaults.Status.InternalServerError, gin.H{"success": false, "error": utils.Defaults.Assignment.QueryFailed})
+		return
+	}
+	if err := AssignmentStatus.Repository.MarkCompleted(userID, assignmentID, task.Title, task.Subject); err != nil {
 		c.JSON(utils.Defaults.Status.InternalServerError, gin.H{"success": false, "error": utils.Defaults.Data.UpdateFailed})
 		return
 	}
@@ -370,12 +374,20 @@ func RemindAssignment(c *gin.Context) {
 	assignmentID := c.Param("id")
 
 	// 检查作业是否已完成或已删除
-	completed, _ := AssignmentStatus.Repository.IsCompleted(userID, assignmentID)
+	completed, err := AssignmentStatus.Repository.IsCompleted(userID, assignmentID)
+	if err != nil {
+		c.JSON(utils.Defaults.Status.InternalServerError, gin.H{"success": false, "error": utils.Defaults.Assignment.QueryFailed})
+		return
+	}
 	if completed {
 		c.JSON(utils.Defaults.Status.BadRequest, gin.H{"success": false, "error": utils.Defaults.Assignment.AlreadyCompleted})
 		return
 	}
-	deleted, _ := AssignmentStatus.Repository.IsDeleted(userID, assignmentID)
+	deleted, err := AssignmentStatus.Repository.IsDeleted(userID, assignmentID)
+	if err != nil {
+		c.JSON(utils.Defaults.Status.InternalServerError, gin.H{"success": false, "error": utils.Defaults.Assignment.QueryFailed})
+		return
+	}
 	if deleted {
 		c.JSON(utils.Defaults.Status.BadRequest, gin.H{"success": false, "error": utils.Defaults.Assignment.AlreadyDeleted})
 		return

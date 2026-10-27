@@ -179,21 +179,20 @@ func (r *MongoTodoRepository) PermanentlyDeleteTodo(id string) error {
 	return err
 }
 
-// MarkCompleted 标记完成，设置 expires_at = 12小时后（TTL 自动清除）
+// MarkCompleted 标记完成，保留待办直到用户删除
 // 对应 Python: mark_completed
 func (r *MongoTodoRepository) MarkCompleted(id string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
 	now := time.Now()
-	expiresAt := now.Add(12 * time.Hour)
 	_, err := r.collection.UpdateOne(ctx, bson.M{"_id": id}, bson.M{
 		"$set": bson.M{
 			"completed":    true,
 			"completed_at": now,
-			"expires_at":   expiresAt,
 			"updated_at":   now,
 		},
+		"$unset": bson.M{"expires_at": ""},
 	})
 	return err
 }
@@ -209,9 +208,9 @@ func (r *MongoTodoRepository) MarkUncompleted(id string) error {
 		"$set": bson.M{
 			"completed":    false,
 			"completed_at": nil,
-			"expires_at":   nil,
 			"updated_at":   now,
 		},
+		"$unset": bson.M{"expires_at": ""},
 	})
 	return err
 }

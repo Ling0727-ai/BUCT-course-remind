@@ -4,12 +4,15 @@ import (
 	"crypto/tls"
 	"fmt"
 	"log"
+	"net"
 	"net/smtp"
 	"os"
 	"strconv"
 	"strings"
 	"time"
 )
+
+const smtpAttemptTimeout = 20 * time.Second
 
 // MailConfig 邮件配置，对应 Python Config 中的 MAIL_* 配置
 type MailConfig struct {
@@ -128,12 +131,19 @@ func (m *MailConfig) SendMail(to, subject, htmlBody string) error {
 // sendSSL 使用 SMTP over SSL（端口 465）发送
 func sendSSL(addr string, auth smtp.Auth, from, to, msg string) error {
 	host := strings.Split(addr, ":")[0]
-	conn, err := tls.Dial("tcp", addr, &tls.Config{ServerName: host})
+	deadline := time.Now().Add(smtpAttemptTimeout)
+	dialer := &net.Dialer{Timeout: 10 * time.Second, Deadline: deadline}
+	conn, err := tls.DialWithDialer(dialer, "tcp", addr, &tls.Config{ServerName: host})
 	if err != nil {
+		return err
+	}
+	if err := conn.SetDeadline(deadline); err != nil {
+		conn.Close()
 		return err
 	}
 	c, err := smtp.NewClient(conn, host)
 	if err != nil {
+		conn.Close()
 		return err
 	}
 	defer c.Close()
@@ -159,13 +169,24 @@ func sendSSL(addr string, auth smtp.Auth, from, to, msg string) error {
 
 // sendStartTLS 使用 SMTP + STARTTLS（端口 587/25）发送
 func sendStartTLS(addr, host string, auth smtp.Auth, from, to, msg string) error {
-	c, err := smtp.Dial(addr)
+	deadline := time.Now().Add(smtpAttemptTimeout)
+	conn, err := (&net.Dialer{Timeout: 10 * time.Second, Deadline: deadline}).Dial("tcp", addr)
 	if err != nil {
 		return err
 	}
+	if err := conn.SetDeadline(deadline); err != nil {
+		conn.Close()
+		return err
+	}
+	c, err := smtp.NewClient(conn, host)
+	if err != nil {
+		conn.Close()
+		return err
+	}
 	defer c.Close()
-	// 忽略 STARTTLS 失败，继续尝试
-	_ = c.StartTLS(&tls.Config{ServerName: host})
+	if err := c.StartTLS(&tls.Config{ServerName: host}); err != nil {
+		return err
+	}
 	if err = c.Auth(auth); err != nil {
 		return err
 	}

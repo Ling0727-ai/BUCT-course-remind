@@ -153,7 +153,7 @@ func UpdateTodo(c *gin.Context) {
 	c.JSON(utils.Defaults.Status.OK, gin.H{"success": true, "message": utils.Defaults.Todo.UpdateSuccess})
 }
 
-// CompleteTodo 标记待办已完成（12h 后 TTL 自动删除）
+// CompleteTodo 标记待办已完成，直到用户删除或撤销
 // 对应 Python POST /api/todos/:id/complete
 func CompleteTodo(c *gin.Context) {
 	userID, ok := getUserID(c)
@@ -172,7 +172,7 @@ func CompleteTodo(c *gin.Context) {
 		c.JSON(utils.Defaults.Status.InternalServerError, gin.H{"success": false, "error": utils.Defaults.Data.UpdateFailed})
 		return
 	}
-	c.JSON(utils.Defaults.Status.OK, gin.H{"success": true, "message": utils.Defaults.Todo.CompleteSuccess + utils.Defaults.Todo.AutoDeleteHint})
+	c.JSON(utils.Defaults.Status.OK, gin.H{"success": true, "message": utils.Defaults.Todo.CompleteSuccess + utils.Defaults.Todo.RetentionHint})
 }
 
 // UncompleteTodo 撤销待办完成状态

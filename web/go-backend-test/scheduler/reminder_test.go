@@ -1,6 +1,7 @@
 package scheduler
 
 import (
+	"context"
 	"strings"
 	"testing"
 	"time"
@@ -9,6 +10,54 @@ import (
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo/integration/mtest"
 )
+
+func TestRecoverStaleReminders(t *testing.T) {
+	mt := mtest.New(t, mtest.NewOptions().ClientType(mtest.Mock))
+	mt.Run("expired lease", func(mt *mtest.T) {
+		now := time.Now()
+		mt.AddMockResponses(mtest.CreateSuccessResponse(bson.E{Key: "n", Value: 1}, bson.E{Key: "nModified", Value: 1}))
+		if err := recoverStaleReminders(context.Background(), mt.Coll, now); err != nil {
+			mt.Fatal(err)
+		}
+		updates, _ := mt.GetAllStartedEvents()[0].Command.Lookup("updates").Array().Values()
+		query := updates[0].Document().Lookup("q").Document()
+		change := updates[0].Document().Lookup("u").Document()
+		limits, _ := query.Lookup("$or").Array().Values()
+		leaseExpiry := limits[0].Document().Lookup("processing_until").Document().Lookup("$lte").DateTime()
+		legacyExpiry := limits[1].Document().Lookup("updated_at").Document().Lookup("$lte").DateTime()
+		if query.Lookup("status").StringValue() != "processing" ||
+			leaseExpiry != now.UnixMilli() || legacyExpiry != now.Add(-reminderProcessingLease).UnixMilli() ||
+			change.Lookup("$set").Document().Lookup("status").StringValue() != "scheduled" ||
+			change.Lookup("$unset").Document().Lookup("claim_token").StringValue() != "" {
+			mt.Fatal("expired processing reminders were not returned to the queue")
+		}
+	})
+}
+
+func TestDeliveryClaimUsesLeaseToken(t *testing.T) {
+	mt := mtest.New(t, mtest.NewOptions().ClientType(mtest.Mock))
+	mt.Run("missing email", func(mt *mtest.T) {
+		mt.AddMockResponses(
+			mtest.CreateSuccessResponse(bson.E{Key: "n", Value: 1}),
+			mtest.CreateSuccessResponse(bson.E{Key: "n", Value: 1}),
+		)
+		if err := deliverReminder(mt.Coll, ScheduledReminder{ID: "reminder", ScheduledTime: time.Now().Add(-time.Minute)}); err != nil {
+			mt.Fatal(err)
+		}
+		events := mt.GetAllStartedEvents()
+		claimRows, _ := events[0].Command.Lookup("updates").Array().Values()
+		finishRows, _ := events[1].Command.Lookup("updates").Array().Values()
+		claimSet := claimRows[0].Document().Lookup("u").Document().Lookup("$set").Document()
+		finishQuery := finishRows[0].Document().Lookup("q").Document()
+		finishChange := finishRows[0].Document().Lookup("u").Document()
+		token := claimSet.Lookup("claim_token").StringValue()
+		if token == "" || finishQuery.Lookup("claim_token").StringValue() != token ||
+			claimSet.Lookup("processing_until").DateTime() <= time.Now().UnixMilli() ||
+			finishChange.Lookup("$unset").Document().Lookup("claim_token").StringValue() != "" {
+			mt.Fatal("delivery was not protected by a live claim token")
+		}
+	})
+}
 
 func TestAutoRemindersBatchQueriesKeepUserStatesSeparate(t *testing.T) {
 	mt := mtest.New(t, mtest.NewOptions().ClientType(mtest.Mock))
@@ -23,7 +72,7 @@ func TestAutoRemindersBatchQueriesKeepUserStatesSeparate(t *testing.T) {
 			mtest.CreateSuccessResponse(bson.E{Key: "n", Value: 0}),
 			mtest.CreateCursorResponse(0, ns+"course_data", mtest.FirstBatch, task("a-task", "a"), task("b-task", "b")),
 			mtest.CreateCursorResponse(0, ns+"users", mtest.FirstBatch, bson.D{{Key: "_id", Value: "a"}, {Key: "email", Value: "a@example.com"}}, bson.D{{Key: "_id", Value: "b"}, {Key: "email", Value: "b@example.com"}}),
-			mtest.CreateCursorResponse(0, ns+"assignment_status", mtest.FirstBatch, bson.D{{Key: "user_id", Value: "a"}, {Key: "assignment_id", Value: "shared-task"}, {Key: "status", Value: "completed"}}),
+			mtest.CreateCursorResponse(0, ns+"assignment_status", mtest.FirstBatch, bson.D{{Key: "user_id", Value: "a"}, {Key: "assignment_id", Value: "shared-task"}, {Key: "status", Value: "completed"}, {Key: "expires_at", Value: now.Add(-time.Hour)}}),
 			mtest.CreateCursorResponse(0, ns+"scheduled_reminders", mtest.FirstBatch),
 			mtest.CreateSuccessResponse(bson.E{Key: "n", Value: 1}),
 			mtest.CreateSuccessResponse(bson.E{Key: "n", Value: 2}),

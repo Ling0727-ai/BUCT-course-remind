@@ -1,8 +1,10 @@
 package Todo
 
 import (
+	"context"
 	"time"
 
+	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
 )
 
@@ -18,7 +20,7 @@ type Todo struct {
 
 	Completed   bool       `bson:"completed" json:"completed"`
 	CompletedAt *time.Time `bson:"completed_at,omitempty" json:"completed_at,omitempty"`
-	// ExpiresAt 完成后 12 小时自动过期（MongoDB TTL 索引）
+	// ExpiresAt 兼容旧数据；完成态不再设置过期时间
 	ExpiresAt *time.Time `bson:"expires_at,omitempty" json:"expires_at,omitempty"`
 
 	IsDeleted  bool       `bson:"is_deleted" json:"is_deleted"`
@@ -47,7 +49,7 @@ type TodoRepository interface {
 	// PermanentlyDeleteTodo 永久删除（forever=0，is_deleted=true）
 	PermanentlyDeleteTodo(id string) error
 
-	// MarkCompleted 标记完成，设置 expires_at = 12h 后
+	// MarkCompleted 标记完成，直到用户删除或撤销
 	MarkCompleted(id string) error
 	MarkUncompleted(id string) error
 
@@ -62,6 +64,12 @@ type MongoTodoRepository struct {
 var Repository = &MongoTodoRepository{}
 
 // Init 在服务启动时绑定 MongoDB collection，必须在接收任何请求前调用
-func Init(db *mongo.Database) {
+func Init(db *mongo.Database) error {
 	Repository.collection = db.Collection("todos")
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	_, err := Repository.collection.UpdateMany(ctx,
+		bson.M{"completed": true, "expires_at": bson.M{"$exists": true}},
+		bson.M{"$unset": bson.M{"expires_at": ""}})
+	return err
 }

@@ -38,6 +38,11 @@ func respondRefreshFailure(c *gin.Context, err error) {
 	if errors.Is(err, context.Canceled) {
 		return
 	}
+	if errors.Is(err, CourseData.ErrEmptyRefreshUnconfirmed) {
+		c.Header("Retry-After", "60")
+		c.JSON(http.StatusServiceUnavailable, gin.H{"success": false, "error": err.Error()})
+		return
+	}
 	status := http.StatusInternalServerError
 	if errors.Is(err, services.ErrRefreshQueueFull) {
 		status = http.StatusServiceUnavailable

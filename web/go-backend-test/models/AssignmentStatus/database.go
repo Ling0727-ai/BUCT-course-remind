@@ -87,6 +87,9 @@ func (r *MongoAssignmentStatusRepository) UpdateStatus(
 	var expiresAt *time.Time
 	var todoExpiresAt *time.Time
 
+	if status == StatusCompleted {
+		autoExpireHours = nil
+	}
 	if autoExpireHours != nil {
 		t := now.Add(time.Duration(*autoExpireHours) * time.Hour)
 		expiresAt = timePtr(t)
@@ -143,11 +146,10 @@ func (r *MongoAssignmentStatusRepository) UpdateStatus(
 	return err
 }
 
-// MarkCompleted 标记已完成，12h 后自动过期
+// MarkCompleted 标记已完成，完成状态由作业生命周期决定
 // 对应 Python: mark_completed
 func (r *MongoAssignmentStatusRepository) MarkCompleted(userID, assignmentID, title, subject string) error {
-	hours := 12
-	return r.UpdateStatus(userID, assignmentID, title, subject, "", StatusCompleted, &hours)
+	return r.UpdateStatus(userID, assignmentID, title, subject, "", StatusCompleted, nil)
 }
 
 // MarkDeleted 软删除，待办类型 12h 后自动删除
@@ -363,6 +365,7 @@ func (r *MongoAssignmentStatusRepository) CleanupExpired() (int64, error) {
 
 	result, err := r.collection.DeleteMany(ctx, bson.M{
 		"expires_at": bson.M{"$lt": time.Now()},
+		"status":     bson.M{"$ne": StatusCompleted},
 	})
 	if err != nil {
 		return 0, err

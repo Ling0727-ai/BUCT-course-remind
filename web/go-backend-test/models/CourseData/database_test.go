@@ -1,6 +1,7 @@
 package CourseData
 
 import (
+	"errors"
 	"testing"
 	"time"
 
@@ -10,7 +11,11 @@ import (
 )
 
 func existingTask(input TaskInput) bson.D {
-	task := CourseData{ID: "stable-id", UserID: "user", TaskID: generateTaskID(input.Type, input.Subject, input.Title, input.Deadline, input.Details),
+	return existingTaskWithID(input, generateTaskID(input.Type, input.Subject, input.Title, input.Details))
+}
+
+func existingTaskWithID(input TaskInput, taskID string) bson.D {
+	task := CourseData{ID: "stable-id", UserID: "user", TaskID: taskID,
 		Subject: input.Subject, Title: input.Title, Deadline: input.Deadline, Details: input.Details, Url: input.Url, Type: input.Type,
 		CreatedAt: time.Now().Add(-time.Hour), UpdatedAt: time.Now().Add(-time.Hour)}
 	normalizeSchedule(&task)
@@ -18,6 +23,78 @@ func existingTask(input TaskInput) bson.D {
 	var doc bson.D
 	_ = bson.Unmarshal(data, &doc)
 	return doc
+}
+
+func TestTaskIdentitySurvivesDeadlineChange(t *testing.T) {
+	old := TaskInput{Type: "homework", Subject: "math", Title: "assignment", Details: "same content", Deadline: "2026-11-01 12:00:00"}
+	changed := old
+	changed.Deadline = "2026-11-02 12:00:00"
+	prior := &CourseData{TaskID: legacyTaskID(old), Type: old.Type, Subject: old.Subject, Title: old.Title, Details: old.Details, Deadline: old.Deadline}
+	identity := generateTaskID(old.Type, old.Subject, old.Title, old.Details)
+	id, matched := resolveTaskID(changed, map[string][]*CourseData{identity: {prior}}, map[string]bool{})
+	if id != prior.TaskID || matched != prior {
+		t.Fatalf("legacy ID was not preserved: id=%q prior=%v", id, matched)
+	}
+}
+
+func TestNewTaskIdentityExcludesDeadline(t *testing.T) {
+	task := TaskInput{Type: "test", Subject: "math", Title: "quiz", Deadline: "2026-11-01 12:00:00"}
+	id, prior := resolveTaskID(task, nil, map[string]bool{})
+	copyID, _ := resolveTaskID(task, nil, map[string]bool{id: true})
+	task.Deadline = "2026-11-02 12:00:00"
+	changedID, changedPrior := resolveTaskID(task, nil, map[string]bool{})
+	changedCopyID, _ := resolveTaskID(task, nil, map[string]bool{id: true})
+	if prior != nil || changedPrior != nil || id != changedID || copyID != changedCopyID || copyID == id {
+		t.Fatalf("deadline changed new task identity: before=%q after=%q copy=%q changedCopy=%q", id, changedID, copyID, changedCopyID)
+	}
+}
+
+func TestDeadlineChangePreservesLegacyIDAndRearmsReminders(t *testing.T) {
+	previousGenerator := config.Snowflake
+	var err error
+	config.Snowflake, err = config.NewSnowflakeGenerator()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { config.Snowflake = previousGenerator })
+	old := TaskInput{Type: "homework", Subject: "math", Title: "assignment", Details: "same content", Deadline: "2026-11-01 12:00:00"}
+	changed := old
+	changed.Deadline = "2026-11-02 12:00:00"
+	legacyID := legacyTaskID(old)
+	mt := mtest.New(t, mtest.NewOptions().ClientType(mtest.Mock))
+	mt.Run("changed deadline", func(mt *mtest.T) {
+		mt.AddMockResponses(
+			mtest.CreateCursorResponse(0, mt.DB.Name()+"."+mt.Coll.Name(), mtest.FirstBatch, existingTaskWithID(old, legacyID)),
+			mtest.CreateSuccessResponse(bson.E{Key: "n", Value: 1}),
+			mtest.CreateSuccessResponse(bson.E{Key: "n", Value: 1}),
+			mtest.CreateSuccessResponse(bson.E{Key: "n", Value: 1}),
+		)
+		repo := &MongoCourseDataRepository{collection: mt.Coll}
+		count, err := repo.SaveUserCourseData("user", []TaskInput{changed})
+		if err != nil || count != 1 {
+			mt.Fatalf("count=%d err=%v", count, err)
+		}
+		courseUpdated, remindersRearmed := false, false
+		for _, event := range mt.GetAllStartedEvents() {
+			if event.CommandName == "delete" {
+				mt.Fatal("deadline edit deleted the existing task")
+			}
+			if event.CommandName != "update" {
+				continue
+			}
+			rows, _ := event.Command.Lookup("updates").Array().Values()
+			filter := rows[0].Document().Lookup("q").Document()
+			switch event.Command.Lookup("update").StringValue() {
+			case mt.Coll.Name():
+				courseUpdated = filter.Lookup("task_id").StringValue() == legacyID
+			case "scheduled_reminders":
+				remindersRearmed = filter.Lookup("target_id").StringValue() == legacyID
+			}
+		}
+		if !courseUpdated || !remindersRearmed {
+			mt.Fatalf("courseUpdated=%v remindersRearmed=%v", courseUpdated, remindersRearmed)
+		}
+	})
 }
 
 func TestUnchangedRefreshOnlyWritesFreshness(t *testing.T) {
@@ -42,6 +119,10 @@ func TestUnchangedRefreshOnlyWritesFreshness(t *testing.T) {
 				writes++
 				if event.Command.Lookup("update").StringValue() != "users" {
 					mt.Fatal("unchanged task was rewritten")
+				}
+				rows, _ := event.Command.Lookup("updates").Array().Values()
+				if rows[0].Document().Lookup("u").Document().Lookup("$unset").Document().Lookup("empty_refresh_seen_at").Type == 0 {
+					mt.Fatal("a successful nonempty refresh kept the empty-result marker")
 				}
 			}
 		}
@@ -89,6 +170,92 @@ func TestEmptySuccessfulRefreshAdvancesFreshness(t *testing.T) {
 		events := mt.GetAllStartedEvents()
 		if len(events) != 2 || events[1].Command.Lookup("update").StringValue() != "users" {
 			mt.Fatal("empty refresh did not record freshness")
+		}
+	})
+}
+
+func TestFirstEmptyRefreshPreservesExistingTasks(t *testing.T) {
+	mt := mtest.New(t, mtest.NewOptions().ClientType(mtest.Mock))
+	mt.Run("first empty result", func(mt *mtest.T) {
+		old := TaskInput{Type: "homework", Subject: "math", Title: "assignment"}
+		mt.AddMockResponses(
+			mtest.CreateCursorResponse(0, mt.DB.Name()+"."+mt.Coll.Name(), mtest.FirstBatch, existingTask(old)),
+			mtest.CreateCursorResponse(0, mt.DB.Name()+".users", mtest.FirstBatch, bson.D{{Key: "_id", Value: "user"}}),
+			mtest.CreateSuccessResponse(bson.E{Key: "n", Value: 1}),
+		)
+		repo := &MongoCourseDataRepository{collection: mt.Coll}
+		if _, err := repo.SaveUserCourseData("user", nil); !errors.Is(err, ErrEmptyRefreshUnconfirmed) {
+			mt.Fatalf("expected confirmation request, got %v", err)
+		}
+		markerWritten := false
+		for _, event := range mt.GetAllStartedEvents() {
+			if event.CommandName == "delete" || (event.CommandName == "update" && event.Command.Lookup("update").StringValue() == mt.Coll.Name()) {
+				mt.Fatal("first empty result changed existing course data")
+			}
+			if event.CommandName == "update" && event.Command.Lookup("update").StringValue() == "users" {
+				rows, _ := event.Command.Lookup("updates").Array().Values()
+				markerWritten = rows[0].Document().Lookup("u").Document().Lookup("$set").Document().Lookup("empty_refresh_seen_at").Type != 0
+			}
+		}
+		if !markerWritten {
+			mt.Fatal("empty result was not recorded for confirmation")
+		}
+	})
+}
+
+func TestConfirmedEmptyRefreshRemovesExistingTasks(t *testing.T) {
+	mt := mtest.New(t, mtest.NewOptions().ClientType(mtest.Mock))
+	mt.Run("second empty result", func(mt *mtest.T) {
+		old := TaskInput{Type: "homework", Subject: "math", Title: "assignment"}
+		mt.AddMockResponses(
+			mtest.CreateCursorResponse(0, mt.DB.Name()+"."+mt.Coll.Name(), mtest.FirstBatch, existingTask(old)),
+			mtest.CreateCursorResponse(0, mt.DB.Name()+".users", mtest.FirstBatch,
+				bson.D{{Key: "_id", Value: "user"}, {Key: "empty_refresh_seen_at", Value: time.Now().Add(-time.Minute)}}),
+			mtest.CreateSuccessResponse(bson.E{Key: "n", Value: 1}),
+			mtest.CreateSuccessResponse(bson.E{Key: "n", Value: 1}),
+			mtest.CreateSuccessResponse(bson.E{Key: "n", Value: 1}),
+			mtest.CreateSuccessResponse(bson.E{Key: "n", Value: 1}),
+		)
+		repo := &MongoCourseDataRepository{collection: mt.Coll}
+		if count, err := repo.SaveUserCourseData("user", nil); err != nil || count != 0 {
+			mt.Fatalf("count=%d err=%v", count, err)
+		}
+		deleted, completedStatusCleared, markerCleared := false, false, false
+		for _, event := range mt.GetAllStartedEvents() {
+			if event.CommandName == "delete" && event.Command.Lookup("delete").StringValue() == mt.Coll.Name() {
+				deleted = true
+			}
+			if event.CommandName == "delete" && event.Command.Lookup("delete").StringValue() == "assignment_status" {
+				completedStatusCleared = true
+			}
+			if event.CommandName == "update" && event.Command.Lookup("update").StringValue() == "users" {
+				rows, _ := event.Command.Lookup("updates").Array().Values()
+				markerCleared = rows[0].Document().Lookup("u").Document().Lookup("$unset").Document().Lookup("empty_refresh_seen_at").Type != 0
+			}
+		}
+		if !deleted || !completedStatusCleared || !markerCleared {
+			mt.Fatalf("deleted=%v completedStatusCleared=%v markerCleared=%v", deleted, completedStatusCleared, markerCleared)
+		}
+	})
+}
+
+func TestImmediateSecondEmptyRefreshDoesNotConfirm(t *testing.T) {
+	mt := mtest.New(t, mtest.NewOptions().ClientType(mtest.Mock))
+	mt.Run("too soon", func(mt *mtest.T) {
+		old := TaskInput{Type: "homework", Subject: "math", Title: "assignment"}
+		mt.AddMockResponses(
+			mtest.CreateCursorResponse(0, mt.DB.Name()+"."+mt.Coll.Name(), mtest.FirstBatch, existingTask(old)),
+			mtest.CreateCursorResponse(0, mt.DB.Name()+".users", mtest.FirstBatch,
+				bson.D{{Key: "_id", Value: "user"}, {Key: "empty_refresh_seen_at", Value: time.Now().Add(-5 * time.Second)}}),
+		)
+		repo := &MongoCourseDataRepository{collection: mt.Coll}
+		if _, err := repo.SaveUserCourseData("user", nil); !errors.Is(err, ErrEmptyRefreshUnconfirmed) {
+			mt.Fatalf("expected pending confirmation, got %v", err)
+		}
+		for _, event := range mt.GetAllStartedEvents() {
+			if event.CommandName == "delete" {
+				mt.Fatal("an immediate retry deleted course data")
+			}
 		}
 	})
 }

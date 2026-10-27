@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/Ling0727-ai/go-buct-course-backend/internal/scheduling"
+	"github.com/Ling0727-ai/go-buct-course-backend/models/CourseData"
 	"github.com/Ling0727-ai/go-buct-course-backend/models/User"
 )
 
@@ -100,6 +101,8 @@ func executeQueuedRefresh(userID string) (int, error) {
 		retryAt := time.Now().Add(15 * time.Minute)
 		if errors.Is(err, errRefreshSuperseded) {
 			retryAt = time.Now()
+		} else if errors.Is(err, CourseData.ErrEmptyRefreshUnconfirmed) {
+			retryAt = time.Now().Add(time.Minute)
 		}
 		if retryErr := User.Repository.ScheduleRefresh(userID, retryAt); retryErr != nil {
 			log.Printf("[refresh] 设置重试时间失败: %v", retryErr)
